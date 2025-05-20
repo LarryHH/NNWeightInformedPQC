@@ -15,11 +15,35 @@ from qiskit.circuit.library import (
 class SpecifiedPQCAnsatz(GenericAnsatz):
     """
     Specified Parameterized Quantum Circuit (PQC) ansatz.
-    
+
     Creates a quantum circuit based on a matrix specification where:
     - Each row represents a qubit
     - Each column represents a time step or layer
-    - Each cell contains a gate specification
+    - Each cell contains a gate specification as a string
+
+    Gate specifications:
+    1. Single-qubit gates:
+    - Use the gate name directly: 'h', 'x', 'y', 'z', 's', 't', 'sdg', 'tdg'
+    - For parameterized gates: 'rx', 'ry', 'rz'
+    - For identity/no operation: 'i', 'id', or '' (empty string)
+
+    2. Two-qubit gates:
+    - Format: '{gate_name}_{index}{direction}'
+    - gate_name: 'cx', 'cz', 'swap', 'cnot'
+    - index: A number to identify which gate this is within the layer (e.g., '1', '2')
+    - direction: 'c' for control qubit, 't' for target qubit
+    - Example: 'cx_1c' and 'cx_1t' form a CNOT gate where '1c' is the control and '1t' is the target
+    - Multiple two-qubit gates in the same layer should use different indices
+
+    Example circuit_spec:
+    [
+        ['h', 'cx_1t', 'rx', 'cz_1c'],  # Qubit 0
+        ['x', 'ry', 'cx_2c', 'cz_1t'],  # Qubit 1
+        ['ry', 'cx_1c', 'cx_2t', 'rz']  # Qubit 2
+    ]
+
+    This creates a 3-qubit circuit with 4 time steps, including both single-qubit gates
+    and properly connected two-qubit gates.
     """
     
     # Define gate mappings - maps string identifiers to gate constructors
