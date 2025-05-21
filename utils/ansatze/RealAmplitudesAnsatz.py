@@ -1,4 +1,4 @@
-from GenericAnsatz import GenericAnsatz
+from .GenericAnsatz import GenericAnsatz
 from qiskit.circuit.library import RealAmplitudes
 
 class RealAmplitudeAnsatz(GenericAnsatz):

@@ -1,4 +1,4 @@
-from GenericAnsatz import GenericAnsatz
+from .GenericAnsatz import GenericAnsatz
 
 import random
 import qiskit
