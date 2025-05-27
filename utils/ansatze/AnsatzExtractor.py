@@ -18,7 +18,7 @@ def extract_and_store_model_schema(ansatz: GenericAnsatz, model, circuit_fp, par
     tensor = next(model.model.parameters())
     param_values = tensor.detach().cpu().tolist()
 
-    gates = dict(circuit.get_ansatz().count_ops())
+    gates = dict(circuit.count_ops())
     entangling_gates = ["cx", "cz", "swap", "ccx", "cswap"]
     num_parameterized_gates = len(param_values)
     num_entangling_gates = sum(gates[gate] for gate in entangling_gates if gate in gates)
