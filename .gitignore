@@ -2,6 +2,7 @@
 # Custom Ignores
 results/
 *.csv
+_*
 
 
 # Byte-compiled / optimized / DLL files
