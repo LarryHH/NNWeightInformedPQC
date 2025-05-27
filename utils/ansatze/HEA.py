@@ -1,4 +1,8 @@
-from .GenericAnsatz import GenericAnsatz
+try:
+    from .GenericAnsatz import GenericAnsatz
+except ImportError:
+    from GenericAnsatz import GenericAnsatz
+
 from qiskit.circuit.library import TwoLocal
 
 class HEA(GenericAnsatz):
@@ -23,6 +27,10 @@ class HEA(GenericAnsatz):
             entanglement=self.entanglement,
             reps=self.depth
         )
+
+    def get_depth(self):
+        """Return the depth of the ansatz."""
+        return self.depth
 
 if __name__ == "__main__":
     n_qubits = 4

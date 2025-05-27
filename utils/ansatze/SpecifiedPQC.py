@@ -1,5 +1,8 @@
-from .GenericAnsatz import GenericAnsatz
-
+try:
+    from .GenericAnsatz import GenericAnsatz
+except ImportError:
+    from GenericAnsatz import GenericAnsatz
+    
 import numpy as np
 import re
 import random

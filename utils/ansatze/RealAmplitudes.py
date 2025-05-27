@@ -1,4 +1,8 @@
-from .GenericAnsatz import GenericAnsatz
+try:
+    from .GenericAnsatz import GenericAnsatz
+except ImportError:
+    from GenericAnsatz import GenericAnsatz
+
 from qiskit.circuit.library import RealAmplitudes
 
 class RealAmplitudeAnsatz(GenericAnsatz):
@@ -19,6 +23,9 @@ class RealAmplitudeAnsatz(GenericAnsatz):
             entanglement=self.entanglement
         )
     
+    def get_depth(self):
+        """Return the depth of the ansatz."""
+        return self.depth
 
 if __name__ == "__main__":
     n_qubits = 4

@@ -7,7 +7,8 @@ class GenericAnsatz(ABC):
     This class establishes a common interface for all ansatz implementations,
     defining standard methods for accessing and visualizing quantum circuits.
     """
-    def __init__(self, n_qubits):
+    def __init__(self, n_qubits, ansatz_name=None):
+        self.ansatz_name = ansatz_name if ansatz_name else self.__class__.__name__
         self.n_qubits = n_qubits
         self.ansatz = self.create_ansatz()
     
@@ -29,7 +30,7 @@ class GenericAnsatz(ABC):
     
     def get_name(self):
         """Return the name of the ansatz circuit."""
-        return self.ansatz.name
+        return self.ansatz_name
     
     def get_params(self):
         """Return the parameters of the ansatz circuit."""
