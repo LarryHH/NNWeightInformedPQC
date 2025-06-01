@@ -10,6 +10,7 @@ from qiskit_machine_learning.neural_networks import SamplerQNN
 from qiskit_machine_learning.connectors import TorchConnector
 from qiskit_machine_learning.gradients import ParamShiftSamplerGradient, SPSASamplerGradient
 from qiskit.transpiler import PassManager
+from qiskit_machine_learning.utils import algorithm_globals
 
 try:
     from .NN import NN
@@ -21,7 +22,7 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
     A Quantum Neural Network model using Qiskit's SamplerQNN and TorchConnector,
     refactored from SamplerQNNTorchModel.
     """
-    def __init__(self, ansatz, n_qubits=2, num_classes=2, initial_point=None):
+    def __init__(self, ansatz, n_qubits=2, num_classes=2, initial_point=None, q_seed=None):
         """
         Initializes the QuantumNN model.
 
@@ -38,6 +39,10 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
         self.initial_point = initial_point
         self.model = None
         self.criterion = nn.NLLLoss()
+        if q_seed is not None:
+            algorithm_globals.random_seed = q_seed
+        else:
+            algorithm_globals.random_seed = 42
 
         feature_map = ZZFeatureMap(feature_dimension=n_qubits, reps=2)
 
@@ -50,10 +55,9 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
             return x % self.num_classes
 
         # sampler = StatevectorSampler() # for statevector simulation (exact, slow)
-        sampler = Sampler(options={"shots": 1024}) # shots-based simulation (approximate, fast, but introduces sampling noise)
+        sampler = Sampler(options={"shots": 1024, "seed": algorithm_globals.random_seed}) # shots-based simulation (approximate, fast, but introduces sampling noise)
         gradient = ParamShiftSamplerGradient(sampler) # for param shift rule (exact, slow)
         # gradient = SPSASamplerGradient(sampler, epsilon=0.05) # stochastic, uses only 2 circuit evals (fast for many params), but needs careful tuning for epsilon and more epochs
-
         qnn = SamplerQNN(
             circuit=qc,
             input_params=feature_map.parameters,    # Parameters of the feature map
