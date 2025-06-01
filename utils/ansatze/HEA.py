@@ -12,7 +12,7 @@ class HEA(GenericAnsatz):
     Uses the TwoLocal circuit from Qiskit with customizable rotation gates,
     entanglement pattern, and circuit depth.
     """
-    def __init__(self, n_qubits, depth, rotation_blocks=None, entanglement_blocks='cx', entanglement='full'):
+    def __init__(self, n_qubits, depth, rotation_blocks=None, entanglement_blocks='cx', entanglement='linear'):
         self.depth = depth
         self.rotation_blocks = rotation_blocks or ['ry', 'rz']
         self.entanglement_blocks = entanglement_blocks
