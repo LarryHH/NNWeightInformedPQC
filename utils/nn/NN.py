@@ -4,6 +4,7 @@ from tqdm.auto import tqdm
 from sklearn.metrics import precision_score, recall_score, f1_score
 import matplotlib.pyplot as plt
 import numpy as np
+import torch.profiler as profiler
 
 class NN(nn.Module):
     """
@@ -114,12 +115,42 @@ class NN(nn.Module):
         """Moves all input tensors to the model's device."""
         return [t.to(self.device) for t in tensors]
     
-    def fit(self, train_loader, val_loader, epochs, optimizer, scheduler=None, verbose=True):
+    def fit(self, train_loader, val_loader, epochs, optimizer, scheduler=None, verbose=True, use_profiler=False):
         """
         Trains the model for a specified number of epochs.
         If verbose is True, uses tqdm for progress display.
         If verbose is False, training is silent.
+        Args:
+            use_profiler (bool): If True, enables PyTorch profiler during training.
         """
+        
+        # --- Profiler Setup ---
+        # Configure activities to profile (CPU, CUDA, or both)
+        activities = [
+            torch.profiler.ProfilerActivity.CPU,
+        ]
+        if self.device.type == 'cuda':
+            activities.append(torch.profiler.ProfilerActivity.CUDA)
+
+        # Set up the profiler schedule
+        # Profile only a few batches for efficiency, after a warm-up.
+        # This profiles 2 batches after 1 warm-up batch, for the first epoch only.
+        profiler_schedule = torch.profiler.schedule(wait=1, warmup=1, active=2, repeat=1)
+        profiler_context = None
+
+        if use_profiler:
+            print("--- PyTorch Profiler Enabled ---")
+            profiler_context = profiler.profile(
+                schedule=profiler_schedule,
+                activities=activities,
+                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/qnn_profile'),
+                with_stack=True,
+                profile_memory=True
+            )
+            profiler_context.__enter__() # Manually enter the context manager
+
+
+        # --- Training Loop ---
         for epoch in range(epochs):
             self.train() # Set model to training mode
             
@@ -135,8 +166,12 @@ class NN(nn.Module):
                 xb, yb = self._to_device(xb, yb)
                 loss = self._train_batch(xb, yb, optimizer) # Implemented by subclass
                 
-                postfix_data = {"batch_loss": f"{loss.item():.3f}"} # Use .3f as in user example
+                postfix_data = {"batch_loss": f"{loss.item():.3f}"}
 
+                # If profiler is active, call prof.step() after each batch
+                if use_profiler and profiler_context is not None:
+                    profiler_context.step()
+                
                 if i == n_batches - 1: # Last batch of the epoch
                     # Evaluate silently for metrics to update history and postfix
                     train_loss_eval, train_acc_eval, *_ = self.evaluate(train_loader, verbose=False)
@@ -168,6 +203,13 @@ class NN(nn.Module):
                 # Set postfix for tqdm loop if verbose
                 if verbose and isinstance(loop, tqdm):
                     loop.set_postfix(**postfix_data)
+        
+        # --- Profiler Teardown ---
+        if use_profiler and profiler_context is not None:
+            profiler_context.__exit__(None, None, None) # Manually exit the context manager
+            print("--- PyTorch Profiler Results ---")
+            print(profiler_context.key_averages().table(sort_by="cuda_time_total" if self.device.type == 'cuda' else "cpu_time_total", row_limit=20))
+            print("\nRun: tensorboard --logdir=./log to view detailed trace.")
 
 
     @torch.no_grad()
