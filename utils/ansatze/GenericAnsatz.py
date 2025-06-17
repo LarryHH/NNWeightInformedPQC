@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-
+import matplotlib.pyplot as plt
 class GenericAnsatz(ABC):
     """
     Abstract base class for quantum ansatz circuits.
@@ -44,3 +44,22 @@ class GenericAnsatz(ABC):
         """Draw the ansatz circuit with optional parameters."""
         kwargs.setdefault('fold', -1)  # Default to unfolded circuit
         print(self.ansatz.decompose().draw(**kwargs))
+
+    def draw_to_img(self, filename=None):
+        """Draw the ansatz circuit to an image file, or render to display."""
+        circ = self.ansatz.decompose()
+        original_global_phase = circ.global_phase
+
+        # Temporarily set global_phase to 0 to prevent it from being drawn
+        circ.global_phase = 0
+        figure = circ.draw(output='mpl', filename=None)
+        circ.global_phase = original_global_phase
+
+        # figure.set_size_inches(14, 7)
+        figure.tight_layout()
+        if filename:
+            figure.savefig(filename)
+            print(f"Circuit saved to {filename}")
+            plt.close(figure)
+        else:
+            plt.show()

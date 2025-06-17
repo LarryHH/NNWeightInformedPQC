@@ -79,7 +79,7 @@ class TTNAnsatz(GenericAnsatz):
 
 
 if __name__ == "__main__":
-    n_qubits = 4
-    ansatz = TTNAnsatz(n_qubits, reps=1, entanglement='linear') # reps = bond dimension
+    n_qubits = 8
+    ansatz = TTNAnsatz(n_qubits, reps=4, entanglement='linear') # reps = bond dimension
     print(f"{ansatz.get_name()}, n_qubits = {ansatz.get_num_qubits()}, with {ansatz.get_num_params()} parameters")
-    ansatz.draw()
+    ansatz.draw_to_img()

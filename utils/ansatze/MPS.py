@@ -31,7 +31,6 @@ def MPS(num_qubits: int, **kwargs) -> QuantumCircuit:
         qc.compose(two_qubit_block, [i, j], inplace=True)
         qc.barrier()
 
-    print(qc.parameters)
     return qc
 
 
@@ -54,3 +53,4 @@ if __name__ == "__main__":
     ansatz = MPSAnsatz(n_qubits, reps=1, entanglement='linear') # reps = bond dimension
     print(f"{ansatz.get_name()}, n_qubits = {ansatz.get_num_qubits()}, with {ansatz.get_num_params()} parameters")
     ansatz.draw()
+    ansatz.draw_to_img()
