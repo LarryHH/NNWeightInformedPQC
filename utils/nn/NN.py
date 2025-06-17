@@ -123,22 +123,17 @@ class NN(nn.Module):
         Args:
             use_profiler (bool): If True, enables PyTorch profiler during training.
         """
-        
-        # --- Profiler Setup ---
-        # Configure activities to profile (CPU, CUDA, or both)
-        activities = [
-            torch.profiler.ProfilerActivity.CPU,
-        ]
-        if self.device.type == 'cuda':
-            activities.append(torch.profiler.ProfilerActivity.CUDA)
-
-        # Set up the profiler schedule
-        # Profile only a few batches for efficiency, after a warm-up.
-        # This profiles 2 batches after 1 warm-up batch, for the first epoch only.
+ 
         profiler_schedule = torch.profiler.schedule(wait=1, warmup=1, active=2, repeat=1)
         profiler_context = None
 
         if use_profiler:
+            activities = [
+                torch.profiler.ProfilerActivity.CPU,
+            ]
+            if self.device.type == 'cuda':
+                activities.append(torch.profiler.ProfilerActivity.CUDA)
+
             print("--- PyTorch Profiler Enabled ---")
             profiler_context = profiler.profile(
                 schedule=profiler_schedule,
