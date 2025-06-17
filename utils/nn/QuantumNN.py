@@ -10,6 +10,7 @@ from qiskit_machine_learning.neural_networks import SamplerQNN
 from qiskit_machine_learning.connectors import TorchConnector
 from qiskit_machine_learning.gradients import ParamShiftSamplerGradient, SPSASamplerGradient
 from qiskit.transpiler import PassManager
+from qiskit import transpile
 from qiskit_machine_learning.utils import algorithm_globals
 
 try:
@@ -53,22 +54,26 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
 
         try:
             if torch.cuda.is_available():
-                from qiskit_aer.primitives import Sampler as AerSampler
-                # Attempt to use GPU with AerSampler
-                sampler = AerSampler(backend_options={"method": "statevector", "device": "GPU", "shots": 1024, "seed": self.seed})
+                from qiskit_aer.primitives import SamplerV2 as AerSampler
                 print("Qiskit Sampler (Aer backend) configured to use GPU.")
+                sampler = AerSampler(
+                    default_shots=1024,  # Default number of shots
+                    seed=self.seed,
+                    options={"backend_options": {"method": "statevector", "device": "GPU"}}
+                )
+                gradient = ParamShiftSamplerGradient(sampler) # for param shift rule (exact, slow)
+                qc = transpile(qc, seed=self.seed, optimization_level=3)
             else:
                 raise ImportError # Force CPU fallback if CUDA not available (no GPU, no Aer-GPU)
         except (ImportError, qiskit.exceptions.QiskitError) as e:
             print(f"Warning: Could not set up Qiskit Aer Sampler for GPU ({e}). Falling back to CPU Sampler.")
-            # Fallback to standard CPU Sampler
-            from qiskit.primitives import Sampler # <-- Re-import the default CPU Sampler here for fallback
+            from qiskit.primitives import Sampler
             sampler = Sampler(options={"shots": 1024, "seed": self.seed})
-
-        # sampler = StatevectorSampler() # for statevector simulation (exact, slow)
-        sampler = Sampler(options={"shots": 1024, "seed": self.seed}) # shots-based simulation (approximate, fast, but introduces sampling noise)
-        gradient = ParamShiftSamplerGradient(sampler) # for param shift rule (exact, slow)
-        # gradient = SPSASamplerGradient(sampler, epsilon=0.05) # stochastic, uses only 2 circuit evals (fast for many params), but needs careful tuning for epsilon and more epochs
+            gradient = ParamShiftSamplerGradient(sampler) # for param shift rule (exact, slow)
+        
+            # sampler = StatevectorSampler() # for statevector simulation (exact, slow)
+            # gradient = SPSASamplerGradient(sampler, epsilon=0.05) # stochastic, uses only 2 circuit evals (fast for many params), but needs careful tuning for epsilon and more epochs
+            
         qnn = SamplerQNN(
             circuit=qc,
             input_params=feature_map.parameters,    # Parameters of the feature map
