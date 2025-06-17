@@ -1,2 +1,8 @@
+numpy
+pandas
+scikit-learn
+matplotlib
+torch
+qiskit-aer-gpu==0.15.1
 qiskit==1.4.2
 qiskit-machine-learning==0.8.2

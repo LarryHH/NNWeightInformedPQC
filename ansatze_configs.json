@@ -1,0 +1,46 @@
+[
+  {
+    "name": "WI-PQC (E) (greedy)",
+    "class_str": "WeightInformedPQCAnsatz",
+    "init_args": {
+      "classical_model": null,
+      "angle_scale_factor": 0.1,
+      "ent_select": "greedy"
+    },
+    "qnn_extra_args": {}
+  },
+  {
+    "name": "WI-PQC (E) (greedy, top_half)",
+    "class_str": "WeightInformedPQCAnsatz",
+    "init_args": {
+      "classical_model": null,
+      "angle_scale_factor": 0.1,
+      "ent_select": "greedy",
+      "ent_top_k": "HALF"
+    },
+    "qnn_extra_args": {}
+  },
+  {
+    "name": "WI-PQC (E) (greedy, cosine_norm)",
+    "class_str": "WeightInformedPQCAnsatz",
+    "init_args": {
+      "classical_model": null,
+      "angle_scale_factor": 0.1,
+      "ent_select": "greedy",
+      "ent_corr": "cosine"
+    },
+    "qnn_extra_args": {}
+  },
+  {
+    "name": "WI-PQC (E) (mwst, cosine_norm)",
+    "class_str": "WeightInformedPQCAnsatz",
+    "init_args": {
+      "classical_model": null,
+      "angle_scale_factor": 0.1,
+      "ent_corr": "cosine",
+      "ent_select": "mwst",
+      "ent_direction": "norm"
+    },
+    "qnn_extra_args": {}
+  }
+]
