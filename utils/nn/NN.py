@@ -24,6 +24,15 @@ class NN(nn.Module):
             "train_loss": [], "val_loss": [],
             "train_acc": [], "val_acc": []
         }
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.to(self.device)
+        print(f"Initialized {self.__class__.__name__} on device: {self.device}")
+    
+    def set_history_to_zero_for_loaded_model(self):
+        self.history = {
+            "train_loss": [0.0], "val_loss": [0.0],
+            "train_acc": [0.0], "val_acc": [0.0]
+        }
 
     def forward(self, x):
         """
@@ -101,8 +110,10 @@ class NN(nn.Module):
         """
         return yb.long().view(-1) # Ensure 1D for comparison with argmax output
 
-
-
+    def _to_device(self, *tensors):
+        """Moves all input tensors to the model's device."""
+        return [t.to(self.device) for t in tensors]
+    
     def fit(self, train_loader, val_loader, epochs, optimizer, scheduler=None, verbose=True):
         """
         Trains the model for a specified number of epochs.
@@ -121,6 +132,7 @@ class NN(nn.Module):
             n_batches = len(train_loader)
             
             for i, (xb, yb) in enumerate(loop):
+                xb, yb = self._to_device(xb, yb)
                 loss = self._train_batch(xb, yb, optimizer) # Implemented by subclass
                 
                 postfix_data = {"batch_loss": f"{loss.item():.3f}"} # Use .3f as in user example
@@ -177,6 +189,7 @@ class NN(nn.Module):
         
         loop = tqdm(loader, desc="Evaluating", leave=False, disable=not verbose)
         for xb, yb_original in loop:
+            xb, yb_original = self._to_device(xb, yb_original)
             logits, loss_value = self._evaluate_batch_loss_and_logits(xb, yb_original) # Implemented by subclass
             yb_for_comparison = self._prepare_targets_for_comparison(yb_original)
 

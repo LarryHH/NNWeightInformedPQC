@@ -22,7 +22,7 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
     A Quantum Neural Network model using Qiskit's SamplerQNN and TorchConnector,
     refactored from SamplerQNNTorchModel.
     """
-    def __init__(self, ansatz, n_qubits=2, num_classes=2, initial_point=None, q_seed=None):
+    def __init__(self, ansatz, n_qubits=2, num_classes=2, initial_point=None, seed=None):
         """
         Initializes the QuantumNN model.
 
@@ -39,10 +39,7 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
         self.initial_point = initial_point
         self.model = None
         self.criterion = nn.NLLLoss()
-        if q_seed is not None:
-            algorithm_globals.random_seed = q_seed
-        else:
-            algorithm_globals.random_seed = 42
+        self.seed = seed if seed is not None else algorithm_globals.random_seed
 
         feature_map = ZZFeatureMap(feature_dimension=n_qubits, reps=2)
 
@@ -54,8 +51,22 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
         def interpret(x):
             return x % self.num_classes
 
+        try:
+            if torch.cuda.is_available():
+                from qiskit_aer.primitives import Sampler as AerSampler
+                # Attempt to use GPU with AerSampler
+                sampler = AerSampler(backend_options={"method": "statevector", "device": "GPU", "shots": 1024, "seed": self.seed})
+                print("Qiskit Sampler (Aer backend) configured to use GPU.")
+            else:
+                raise ImportError # Force CPU fallback if CUDA not available (no GPU, no Aer-GPU)
+        except (ImportError, qiskit.exceptions.QiskitError) as e:
+            print(f"Warning: Could not set up Qiskit Aer Sampler for GPU ({e}). Falling back to CPU Sampler.")
+            # Fallback to standard CPU Sampler
+            from qiskit.primitives import Sampler # <-- Re-import the default CPU Sampler here for fallback
+            sampler = Sampler(options={"shots": 1024, "seed": self.seed})
+
         # sampler = StatevectorSampler() # for statevector simulation (exact, slow)
-        sampler = Sampler(options={"shots": 1024, "seed": algorithm_globals.random_seed}) # shots-based simulation (approximate, fast, but introduces sampling noise)
+        sampler = Sampler(options={"shots": 1024, "seed": self.seed}) # shots-based simulation (approximate, fast, but introduces sampling noise)
         gradient = ParamShiftSamplerGradient(sampler) # for param shift rule (exact, slow)
         # gradient = SPSASamplerGradient(sampler, epsilon=0.05) # stochastic, uses only 2 circuit evals (fast for many params), but needs careful tuning for epsilon and more epochs
         qnn = SamplerQNN(
@@ -82,6 +93,7 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
 
 
         self.model = TorchConnector(qnn, initial_weights=current_initial_point if num_ansatz_params > 0 else None)
+        self.model.to(self.device)
 
     def forward(self, x):
         """
