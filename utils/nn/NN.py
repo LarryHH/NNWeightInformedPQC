@@ -23,7 +23,10 @@ class NN(nn.Module):
         self.criterion = None # Must be set by subclasses
         self.history = {
             "train_loss": [], "val_loss": [],
-            "train_acc": [], "val_acc": []
+            "train_acc": [], "val_acc": [],
+            "train_prec": [], "val_prec": [],
+            "train_rec": [], "val_rec": [],
+            "train_f1": [], "val_f1": [],
         }
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.to(self.device)
@@ -32,7 +35,10 @@ class NN(nn.Module):
     def set_history_to_zero_for_loaded_model(self):
         self.history = {
             "train_loss": [0.0], "val_loss": [0.0],
-            "train_acc": [0.0], "val_acc": [0.0]
+            "train_acc": [0.0], "val_acc": [0.0],
+            "train_prec": [0.0], "val_prec": [0.0],
+            "train_rec": [0.0], "val_rec": [0.0],
+            "train_f1": [0.0], "val_f1": [0.0],
         }
 
     def forward(self, x):
@@ -169,8 +175,9 @@ class NN(nn.Module):
                 
                 if i == n_batches - 1: # Last batch of the epoch
                     # Evaluate silently for metrics to update history and postfix
-                    train_loss_eval, train_acc_eval, *_ = self.evaluate(train_loader, verbose=False)
-                    val_loss_eval,   val_acc_eval,   *_ = self.evaluate(val_loader, verbose=False)
+                    train_loss_eval, train_acc_eval, train_prec_eval, train_rec_eval, train_f1_eval, *_ = self.evaluate(train_loader, verbose=False)
+                    val_loss_eval,   val_acc_eval, val_prec_eval, val_rec_eval, val_f1_eval, *_ = self.evaluate(val_loader, verbose=False)
+
 
                     if scheduler is not None:
                         if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -182,6 +189,12 @@ class NN(nn.Module):
                     self.history["val_loss"].append(val_loss_eval)
                     self.history["train_acc"].append(train_acc_eval)
                     self.history["val_acc"].append(val_acc_eval)
+                    self.history["train_prec"].append(train_prec_eval)
+                    self.history["val_prec"].append(val_prec_eval)
+                    self.history["train_rec"].append(train_rec_eval)
+                    self.history["val_rec"].append(val_rec_eval)
+                    self.history["train_f1"].append(train_f1_eval)
+                    self.history["val_f1"].append(val_f1_eval)
 
                     # Update postfix with epoch summaries if verbose
                     if verbose:
