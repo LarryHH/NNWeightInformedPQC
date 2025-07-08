@@ -62,7 +62,7 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
                     options={"backend_options": {"method": "statevector", "device": "GPU"}}
                 )
                 gradient = ParamShiftSamplerGradient(sampler) # for param shift rule (exact, slow)
-                qc = transpile(qc, seed=self.seed, optimization_level=3)
+                qc = transpile(qc, seed_transpiler=self.seed, optimization_level=3)
             else:
                 raise ImportError # Force CPU fallback if CUDA not available (no GPU, no Aer-GPU)
         except (ImportError, qiskit.exceptions.QiskitError) as e:
@@ -73,7 +73,7 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
         
             # sampler = StatevectorSampler() # for statevector simulation (exact, slow)
             # gradient = SPSASamplerGradient(sampler, epsilon=0.05) # stochastic, uses only 2 circuit evals (fast for many params), but needs careful tuning for epsilon and more epochs
-            
+
         qnn = SamplerQNN(
             circuit=qc,
             input_params=feature_map.parameters,    # Parameters of the feature map
