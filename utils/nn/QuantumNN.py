@@ -65,7 +65,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
             return x % self.num_classes
 
         try:
-            if torch.cuda.is_available():
+            if use_gpu and torch.cuda.is_available():
                 from qiskit_aer.primitives import SamplerV2 as AerSampler
 
                 print("Qiskit Sampler (Aer backend) configured to use GPU.")
@@ -73,7 +73,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
                     default_shots=1024,  # Default number of shots
                     seed=self.seed,
                     options={
-                        "backend_options": {"method": "statevector", "device": "GPU"}
+                        "backend_options": {"method": "automatic", "device": "GPU"}
                     },
                 )
                 gradient = ParamShiftSamplerGradient(
@@ -96,6 +96,9 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
             # sampler = StatevectorSampler() # for statevector simulation (exact, slow)
             # gradient = SPSASamplerGradient(sampler, epsilon=0.05) # stochastic, uses only 2 circuit evals (fast for many params), but needs careful tuning for epsilon and more epochs
 
+        print("Backend options:", sampler._backend.options)
+        print("Available devices:", sampler._backend.available_devices())
+        
         qnn = SamplerQNN(
             circuit=qc,
             input_params=feature_map.parameters,  # Parameters of the feature map
