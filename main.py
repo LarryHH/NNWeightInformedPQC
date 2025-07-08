@@ -1,7 +1,4 @@
 # %%
-
-
-
 import os
 import json
 import time
@@ -47,10 +44,13 @@ from sklearn.metrics import (
 
 from utils.data.preprocessing import data_pipeline
 
+# %%
+# CONFIGS
 
 USE_GPU = True
+VERBOSE_ON_FIT = False
 
-SEEDS = [0, 1, 2, 3, 4]  # For reproducibility
+SEEDS = [1, 2, 3, 4]  # For reproducibility
 
 DATASET_NAMES = ["iris", "wine", "diabetes"]  # "diabetes" # Add or modify as needed
 OPENML_DATASET_IDS = {
@@ -62,14 +62,12 @@ OPENML_DATASET_IDS = {
 # Common training parameters
 DO_PCA = True
 DEPTH = 2
-N_COMPONENTS = [8]  # Used if DO_PCA is True
+N_COMPONENTS = [4, 6]  # Used if DO_PCA is True
 BATCH_SIZE = 32
 EPOCHS_CLASSICAL = 100  # Reduced for quick testing; use your value e.g., 100
 EPOCHS_QUANTUM = 30  # Reduced for quick testing; use your value e.g., 50
 CLASSICAL_LR = 0.01
 QUANTUM_LR = 0.05
-
-LOAD_IN_CLASSICAL = False  # Whether to load classical model from file if exists
 
 # %%
 def set_seed(seed):
@@ -359,13 +357,13 @@ def create_environment_results_directory(env_id: str, base_path: str = "./result
 get_environment_identifier()
 
 # %%
-# --- Experiment Configurations ---
-
 ENV_ID = get_environment_identifier()
 # Create results directory based on environment identifier
 RESULTS_DIR = create_environment_results_directory(ENV_ID)
 RESULTS_CSV_FILE = RESULTS_DIR / "wi_experiment.csv"  # Results CSV file path
 SCHEMA_OUTPUT_DIR = RESULTS_DIR / "schemas"  # Directory for saving schemas
+
+LOAD_IN_CLASSICAL = False  # Whether to load classical model from file if exists
 
 os.makedirs(os.path.dirname(RESULTS_CSV_FILE), exist_ok=True)
 os.makedirs(SCHEMA_OUTPUT_DIR, exist_ok=True)
@@ -471,7 +469,7 @@ if __name__ == "__main__":
                         val_loader_c,
                         epochs=EPOCHS_CLASSICAL,
                         optimizer=optimizer_c,
-                        verbose=False,
+                        verbose=VERBOSE_ON_FIT,
                     )  # Set verbose as needed
                     end_time_c = time.time()
                     avg_time_epoch_c = (
@@ -591,7 +589,7 @@ if __name__ == "__main__":
                         epochs=EPOCHS_QUANTUM,
                         optimizer=optimizer_q,
                         scheduler=scheduler_q,
-                        verbose=False,
+                        verbose=VERBOSE_ON_FIT,
                     )  # Set verbose
                     end_time_q = time.time()
                     avg_time_epoch_q = (
