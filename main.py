@@ -48,7 +48,7 @@ from utils.data.preprocessing import data_pipeline
 # CONFIGS
 
 USE_GPU = True
-VERBOSE_ON_FIT = False
+VERBOSE_ON_FIT = True
 
 SEEDS = [1, 2, 3, 4]  # For reproducibility
 
@@ -578,7 +578,6 @@ if __name__ == "__main__":
                         factor=0.3,
                         patience=max(1, EPOCHS_QUANTUM // 5),
                         min_lr=1e-4,
-                        verbose=False,
                     )
 
                     print(f"[INFO] Training Quantum Model ({ansatz_name})...")
