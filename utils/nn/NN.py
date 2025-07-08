@@ -10,7 +10,7 @@ class NN(nn.Module):
     """
     Base Neural Network class providing common training, evaluation, and history plotting functionalities.
     """
-    def __init__(self, num_classes):
+    def __init__(self, num_classes, use_gpu=False):
         """
         Initializes the base NN class.
 
@@ -28,7 +28,14 @@ class NN(nn.Module):
             "train_rec": [], "val_rec": [],
             "train_f1": [], "val_f1": [],
         }
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if use_gpu:
+            if torch.cuda.is_available():
+                print("Using GPU for training.")
+            else:
+                print("GPU not available, falling back to CPU.")
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device("cpu")
         self.to(self.device)
         print(f"Initialized {self.__class__.__name__} on device: {self.device}")
     

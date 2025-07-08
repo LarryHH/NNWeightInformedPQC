@@ -8,7 +8,10 @@ from qiskit.circuit.library import TwoLocal, ZZFeatureMap
 from qiskit.primitives import StatevectorSampler, Sampler
 from qiskit_machine_learning.neural_networks import SamplerQNN
 from qiskit_machine_learning.connectors import TorchConnector
-from qiskit_machine_learning.gradients import ParamShiftSamplerGradient, SPSASamplerGradient
+from qiskit_machine_learning.gradients import (
+    ParamShiftSamplerGradient,
+    SPSASamplerGradient,
+)
 from qiskit.transpiler import PassManager
 from qiskit import transpile
 from qiskit_machine_learning.utils import algorithm_globals
@@ -18,12 +21,22 @@ try:
 except ImportError:
     from NN import NN
 
-class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
+
+class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
     """
     A Quantum Neural Network model using Qiskit's SamplerQNN and TorchConnector,
     refactored from SamplerQNNTorchModel.
     """
-    def __init__(self, ansatz, n_qubits=2, num_classes=2, initial_point=None, seed=None):
+
+    def __init__(
+        self,
+        ansatz,
+        n_qubits=2,
+        num_classes=2,
+        initial_point=None,
+        seed=None,
+        use_gpu: bool = False,
+    ):
         """
         Initializes the QuantumNN model.
 
@@ -34,7 +47,7 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
             initial_point (np.ndarray, optional): Initial values for the ansatz parameters.
                                                  If None, random values are used. Defaults to None.
         """
-        super().__init__(num_classes=num_classes)
+        super().__init__(num_classes=num_classes, use_gpu=use_gpu)
         self.n_qubits = n_qubits
         self.ansatz = ansatz
         self.initial_point = initial_point
@@ -48,46 +61,55 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
         qc.compose(feature_map, inplace=True)
         qc.compose(self.ansatz, inplace=True)
 
-
         def interpret(x):
             return x % self.num_classes
 
         try:
             if torch.cuda.is_available():
                 from qiskit_aer.primitives import SamplerV2 as AerSampler
+
                 print("Qiskit Sampler (Aer backend) configured to use GPU.")
                 sampler = AerSampler(
                     default_shots=1024,  # Default number of shots
                     seed=self.seed,
-                    options={"backend_options": {"method": "statevector", "device": "GPU"}}
+                    options={
+                        "backend_options": {"method": "statevector", "device": "GPU"}
+                    },
                 )
-                gradient = ParamShiftSamplerGradient(sampler) # for param shift rule (exact, slow)
+                gradient = ParamShiftSamplerGradient(
+                    sampler
+                )  # for param shift rule (exact, slow)
                 qc = transpile(qc, seed_transpiler=self.seed, optimization_level=3)
             else:
-                raise ImportError # Force CPU fallback if CUDA not available (no GPU, no Aer-GPU)
+                raise ImportError  # Force CPU fallback if CUDA not available (no GPU, no Aer-GPU)
         except (ImportError, qiskit.exceptions.QiskitError) as e:
-            print(f"Warning: Could not set up Qiskit Aer Sampler for GPU ({e}). Falling back to CPU Sampler.")
+            print(
+                f"Warning: Could not set up Qiskit Aer Sampler for GPU ({e}). Falling back to CPU Sampler."
+            )
             from qiskit.primitives import Sampler
+
             sampler = Sampler(options={"shots": 1024, "seed": self.seed})
-            gradient = ParamShiftSamplerGradient(sampler) # for param shift rule (exact, slow)
-        
+            gradient = ParamShiftSamplerGradient(
+                sampler
+            )  # for param shift rule (exact, slow)
+
             # sampler = StatevectorSampler() # for statevector simulation (exact, slow)
             # gradient = SPSASamplerGradient(sampler, epsilon=0.05) # stochastic, uses only 2 circuit evals (fast for many params), but needs careful tuning for epsilon and more epochs
 
         qnn = SamplerQNN(
             circuit=qc,
-            input_params=feature_map.parameters,    # Parameters of the feature map
-            weight_params=self.ansatz.parameters,   # Parameters of the ansatz (trainable weights)
-            interpret=interpret,       # Maps measurement outcomes to class indices
-            output_shape=self.num_classes,          # QNN outputs a probability vector of this size
+            input_params=feature_map.parameters,  # Parameters of the feature map
+            weight_params=self.ansatz.parameters,  # Parameters of the ansatz (trainable weights)
+            interpret=interpret,  # Maps measurement outcomes to class indices
+            output_shape=self.num_classes,  # QNN outputs a probability vector of this size
             sampler=sampler,
             gradient=gradient,
-            input_gradients=False, # Default, but can be explicit
-            pass_manager=PassManager() # Added as in original code
+            input_gradients=False,  # Default, but can be explicit
+            pass_manager=PassManager(),  # Added as in original code
         )
 
         num_ansatz_params = 0
-        if self.ansatz.parameters: # Check if ansatz has parameters
+        if self.ansatz.parameters:  # Check if ansatz has parameters
             num_ansatz_params = len(self.ansatz.parameters)
 
         current_initial_point = None
@@ -96,8 +118,10 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
         else:
             current_initial_point = np.asarray(self.initial_point)
 
-
-        self.model = TorchConnector(qnn, initial_weights=current_initial_point if num_ansatz_params > 0 else None)
+        self.model = TorchConnector(
+            qnn,
+            initial_weights=current_initial_point if num_ansatz_params > 0 else None,
+        )
         self.model.to(self.device)
 
     def forward(self, x):
@@ -116,7 +140,7 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
         # Add a small epsilon for numerical stability before log for NLLLoss, as in original
         log_probs = torch.log(p + 1e-12)
         return log_probs
-    
+
     def _prepare_targets_for_loss(self, yb):
         """
         Prepares target labels for NLLLoss.
@@ -131,13 +155,12 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
         """
         return yb.long().view(-1)
 
-
     def _train_batch(self, xb, yb, optimizer):
         """
         Performs a single training step for the QuantumNN.
         """
         optimizer.zero_grad()
-        log_probs = self(xb) # self.forward(xb) which returns log_probabilities
+        log_probs = self(xb)  # self.forward(xb) which returns log_probabilities
         yb_processed = self._prepare_targets_for_loss(yb)
         loss = self.criterion(log_probs, yb_processed)
         loss.backward()
@@ -148,7 +171,7 @@ class QuantumNN(NN): # Renamed from SamplerQNNTorchModel
         """
         Evaluates a batch and returns log-probabilities (as logits for NLLLoss) and loss.
         """
-        log_probs = self(xb) # self.forward(xb) returns log_probabilities
+        log_probs = self(xb)  # self.forward(xb) returns log_probabilities
         yb_processed = self._prepare_targets_for_loss(yb_original)
         loss = self.criterion(log_probs, yb_processed)
         # For NLLLoss, the input (log_probs) is effectively the "logits"

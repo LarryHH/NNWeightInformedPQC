@@ -118,8 +118,9 @@ class FlexibleNN(NN):
         act: str = "relu",
         condition_number: float = 0.0,      # 0 ⇒ no κ penalty
         scale_on_export: bool = False,
+        use_gpu: bool = False
     ):
-        super().__init__(num_classes=output_dim)
+        super().__init__(num_classes=output_dim, use_gpu=use_gpu)
         self.condition_number = condition_number
         self.scale_on_export = scale_on_export
         layers, in_d = [], input_dim
