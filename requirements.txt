@@ -2,6 +2,7 @@ numpy
 pandas
 scikit-learn
 matplotlib
+seaborn
 openml
 torch
 qiskit-aer-gpu==0.15.1
