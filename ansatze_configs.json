@@ -1,46 +1,138 @@
 [
   {
-    "name": "WI-PQC (E) (greedy)",
-    "class_str": "WeightInformedPQCAnsatz",
-    "init_args": {
-      "classical_model": null,
-      "angle_scale_factor": 0.1,
-      "ent_select": "greedy"
-    },
-    "qnn_extra_args": {}
+      "name": "HEA (y, z)",
+      "class_str": "HEA",
+      "init_args": {
+          "depth": "DEPTH"
+      },
+      "qnn_extra_args": {}
   },
   {
-    "name": "WI-PQC (E) (greedy, top_half)",
-    "class_str": "WeightInformedPQCAnsatz",
-    "init_args": {
-      "classical_model": null,
-      "angle_scale_factor": 0.1,
-      "ent_select": "greedy",
-      "ent_top_k": "HALF"
-    },
-    "qnn_extra_args": {}
+      "name": "WI-PQC (E) (greedy)",
+      "class_str": "WeightInformedPQCAnsatz",
+      "init_args": {
+          "classical_model": null,
+          "angle_scale_factor": 0.1,
+          "ent_select": "greedy"
+      },
+      "qnn_extra_args": {}
   },
   {
-    "name": "WI-PQC (E) (greedy, cosine_norm)",
-    "class_str": "WeightInformedPQCAnsatz",
-    "init_args": {
-      "classical_model": null,
-      "angle_scale_factor": 0.1,
-      "ent_select": "greedy",
-      "ent_corr": "cosine"
-    },
-    "qnn_extra_args": {}
+      "name": "WI-PQC (E) (greedy, top_half)",
+      "class_str": "WeightInformedPQCAnsatz",
+      "init_args": {
+          "classical_model": null,
+          "angle_scale_factor": 0.1,
+          "ent_select": "greedy",
+          "ent_top_k": "HALF"
+      },
+      "qnn_extra_args": {}
   },
   {
-    "name": "WI-PQC (E) (mwst, cosine_norm)",
-    "class_str": "WeightInformedPQCAnsatz",
-    "init_args": {
-      "classical_model": null,
-      "angle_scale_factor": 0.1,
-      "ent_corr": "cosine",
-      "ent_select": "mwst",
-      "ent_direction": "norm"
-    },
-    "qnn_extra_args": {}
+      "name": "WI-PQC (E) (greedy, cosine_norm)",
+      "class_str": "WeightInformedPQCAnsatz",
+      "init_args": {
+          "classical_model": null,
+          "angle_scale_factor": 0.1,
+          "ent_select": "greedy",
+          "ent_corr": "cosine"
+      },
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "WI-PQC (E) (mwst, cosine_norm)",
+      "class_str": "WeightInformedPQCAnsatz",
+      "init_args": {
+          "classical_model": null,
+          "angle_scale_factor": 0.1,
+          "ent_corr": "cosine",
+          "ent_select": "mwst",
+          "ent_direction": "norm"
+      },
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "WI-PQC (W+E, chunking)",
+      "class_str": "WeightInformedPQCAnsatz",
+      "init_args": {
+          "classical_model": null,
+          "angle_scale_factor": 0.1,
+          "rot_angle_derivation_strategy": "chunking"
+      },
+      "qnn_extra_args_builder_str": "get_initial_point_builder"
+  },
+  {
+      "name": "WI-PQC (W+E, svd)",
+      "class_str": "WeightInformedPQCAnsatz",
+      "init_args": {
+          "classical_model": null,
+          "angle_scale_factor": 0.1,
+          "rot_angle_derivation_strategy": "svd"
+      },
+      "qnn_extra_args_builder_str": "get_initial_point_builder"
+  },
+  {
+      "name": "WI-PQC (W1+W2+E, chunking)",
+      "class_str": "WeightInformedPQCAnsatz",
+      "init_args": {
+          "classical_model": null,
+          "angle_scale_factor": 0.1,
+          "rot_use_w1w2_block2": true,
+          "rot_angle_derivation_strategy": "chunking"
+      },
+      "qnn_extra_args_builder_str": "get_initial_point_builder"
+  },
+  {
+      "name": "WI-PQC (W1+W2+E, svd)",
+      "class_str": "WeightInformedPQCAnsatz",
+      "init_args": {
+          "classical_model": null,
+          "angle_scale_factor": 0.1,
+          "rot_use_w1w2_block2": true,
+          "rot_angle_derivation_strategy": "svd"
+      },
+      "qnn_extra_args_builder_str": "get_initial_point_builder"
+  },
+  {
+      "name": "Random PQC",
+      "class_str": "RandomPQCAnsatz",
+      "init_args": {"depth": "DEPTH"},
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "MPS (d=1)",
+      "class_str": "MPSAnsatz",
+      "init_args": {"reps": 1},
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "MPS (d=2)",
+      "class_str": "MPSAnsatz",
+      "init_args": {"reps": 2},
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "MPS (d=3)",
+      "class_str": "MPSAnsatz",
+      "init_args": {"reps": 3},
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "TTN (d=1)",
+      "class_str": "TTNAnsatz",
+      "init_args": {"reps": 1},
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "TTN (d=2)",
+      "class_str": "TTNAnsatz",
+      "init_args": {"reps": 2},
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "TTN (d=3)",
+      "class_str": "TTNAnsatz",
+      "init_args": {"reps": 3},
+      "qnn_extra_args": {}
   }
 ]
