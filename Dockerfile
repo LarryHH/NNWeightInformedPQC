@@ -38,6 +38,7 @@ RUN apt-get update && \
     python3-pip \
     python3.11-venv \
     curl \
+    nano \
     git \
     build-essential && \
     apt-get clean && \

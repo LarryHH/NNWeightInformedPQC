@@ -84,7 +84,6 @@ try:
     sim_gpu = AerSimulator(method="statevector", device="GPU")
     print(f"AerSimulator GPU backend initialized successfully: {sim_gpu.status}")
     print(f"Aer version: {sim_gpu.version}")
-    print(f"Aer default device for statevector: {AerSimulator.default_options().device}")
 
     # Small test run to trigger actual GPU usage and monitor utilization
     print("\n--- Running a small Qiskit Aer GPU test simulation (N=28, D=40) ---")
