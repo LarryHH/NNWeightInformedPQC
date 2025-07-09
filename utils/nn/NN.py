@@ -128,6 +128,10 @@ class NN(nn.Module):
         """Moves all input tensors to the model's device."""
         return [t.to(self.device) for t in tensors]
     
+    def end_epoch(self):          
+        """Called once after every training epoch."""
+        pass
+
     def fit(self, train_loader, val_loader, epochs, optimizer, scheduler=None, verbose=True, use_profiler=False):
         """
         Trains the model for a specified number of epochs.
@@ -218,6 +222,7 @@ class NN(nn.Module):
                 # Set postfix for tqdm loop if verbose
                 if verbose and isinstance(loop, tqdm):
                     loop.set_postfix(**postfix_data)
+            self.end_epoch() 
         
         # --- Profiler Teardown ---
         if use_profiler and profiler_context is not None:
