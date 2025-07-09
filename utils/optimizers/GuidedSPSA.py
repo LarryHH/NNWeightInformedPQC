@@ -5,7 +5,7 @@ from qiskit_machine_learning.gradients import (
     SPSASamplerGradient,
     SamplerGradientResult,
 )
-from qiskit.circuit import Parameter    # only for typing
+from qiskit.circuit import Parameter
 
 def _sample_norm(sample_grad):
     """Euclidean norm of one sample (list[dict])."""
@@ -28,7 +28,6 @@ class GuidedSPSASamplerGradient(BaseSamplerGradient):
     Splits each mini-batch: a τ-fraction is evaluated with parameter-shift,
     the rest with SPSA whose batch-size k is scheduled epoch-wise.
     """
-    # ─── public API ──────────────────────────────────────────────────────
     def __init__(
         self,
         sampler,
