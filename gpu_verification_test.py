@@ -24,6 +24,7 @@ def _gpu_stats():
         util = pynvml.nvmlDeviceGetUtilizationRates(h)
         return mem.used / 2**20, util.gpu          # MB, %
     except (ModuleNotFoundError, AttributeError):
+        print("⚠️  pynvml not installed – GPU stats unavailable.")
         return None, None
 
 @contextlib.contextmanager
@@ -40,11 +41,10 @@ def gpu_monitor(label):
 # 2.  Check installation
 # ------------------------------------------------------------
 print("\n=== Aer installation check ===")
-print("Available methods:", AerSimulator.available_methods())
 
-sim_cpu = AerSimulator(method="statevector")
+sim_cpu = AerSimulator(method="statevector", device="CPU")
 try:
-    sim_gpu = AerSimulator(method="statevector_gpu")   # ⇐ forces GPU path :contentReference[oaicite:0]{index=0}
+    sim_gpu = AerSimulator(method="statevector", device="GPU")   # ⇐ forces GPU path :contentReference[oaicite:0]{index=0}
 except AerError as err:
     sim_gpu = None
     print("⚠️  GPU backend NOT found – reinstall with:")
@@ -53,10 +53,11 @@ except AerError as err:
     exit(1)
 
 # ------------------------------------------------------------
-# 3.  Build a 24-qubit test circuit
+# 3.  Build an n-qubit test circuit
 # ------------------------------------------------------------
-n_qubits, depth = 24, 40
+n_qubits, depth = 35, 40
 qc = random_circuit(n_qubits, depth, measure=False, seed=0)
+# print(qc.draw(idle_wires=False, fold=-1))
 
 def run_and_time(sim, label):
     circ = transpile(qc, sim)
@@ -68,7 +69,7 @@ def run_and_time(sim, label):
         res = job.result()
         dt = time.perf_counter() - t0
         pr.disable()
-    print(f"{label:4s} elapsed : {dt:7.3f} s   backend={job.backend().name()}")
+    print(f"{label:4s} elapsed : {dt:7.3f} s   backend={job.backend().name}")
     pstats.Stats(pr).strip_dirs().sort_stats("cumtime").print_stats(6)
     return dt
 
