@@ -12,6 +12,7 @@ from qiskit_machine_learning.gradients import (
     ParamShiftSamplerGradient,
     SPSASamplerGradient,
 )
+from utils.optimizers.GuidedSPSA import GuidedSPSASamplerGradient
 from qiskit.transpiler import PassManager
 from qiskit import transpile
 from qiskit_machine_learning.utils import algorithm_globals
@@ -36,6 +37,9 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         initial_point=None,
         seed=None,
         use_gpu: bool = False,
+        default_shots: int = 1024,
+        gradient_method: str = "param_shift",  # Default gradient method
+        spsa_epsilon: float = 0.05,  # Default epsilon for SPSA
     ):
         """
         Initializes the QuantumNN model.
@@ -64,40 +68,14 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         def interpret(x):
             return x % self.num_classes
 
-        try:
-            if use_gpu and torch.cuda.is_available():
-                from qiskit_aer.primitives import SamplerV2 as AerSampler
-
-                print("Qiskit Sampler (Aer backend) configured to use GPU.")
-                sampler = AerSampler(
-                    default_shots=1024,  # Default number of shots
-                    seed=self.seed,
-                    options={
-                        "backend_options": {"method": "automatic", "device": "GPU"}
-                    },
-                )
-                gradient = ParamShiftSamplerGradient(
-                    sampler
-                )  # for param shift rule (exact, slow)
-                qc = transpile(qc, seed_transpiler=self.seed, optimization_level=3)
-            else:
-                raise ImportError  # Force CPU fallback if CUDA not available (no GPU, no Aer-GPU)
-        except (ImportError, qiskit.exceptions.QiskitError) as e:
-            print(
-                f"Warning: Could not set up Qiskit Aer Sampler for GPU ({e}). Falling back to CPU Sampler."
-            )
-            from qiskit.primitives import Sampler
-
-            sampler = Sampler(options={"shots": 1024, "seed": self.seed})
-            gradient = ParamShiftSamplerGradient(
-                sampler
-            )  # for param shift rule (exact, slow)
-
-            # sampler = StatevectorSampler() # for statevector simulation (exact, slow)
-            # gradient = SPSASamplerGradient(sampler, epsilon=0.05) # stochastic, uses only 2 circuit evals (fast for many params), but needs careful tuning for epsilon and more epochs
-
-        print("Backend options:", sampler._backend.options)
-        print("Available devices:", sampler._backend.available_devices())
+        # Select the sampler and gradient method based on the device
+        if use_gpu:
+            self.sampler = self.select_sampler(sampler_device="gpu", default_shots=default_shots)
+        else:
+            self.sampler = self.select_sampler(sampler_device="cpu", default_shots=default_shots)
+        
+        self.inspect_sampler(self.sampler)
+        self.gradient = self.select_gradient(gradient_method, spsa_epsilon)
         
         qnn = SamplerQNN(
             circuit=qc,
@@ -105,8 +83,8 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
             weight_params=self.ansatz.parameters,  # Parameters of the ansatz (trainable weights)
             interpret=interpret,  # Maps measurement outcomes to class indices
             output_shape=self.num_classes,  # QNN outputs a probability vector of this size
-            sampler=sampler,
-            gradient=gradient,
+            sampler=self.sampler,
+            gradient=self.gradient,
             input_gradients=False,  # Default, but can be explicit
             pass_manager=PassManager(),  # Added as in original code
         )
@@ -126,6 +104,84 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
             initial_weights=current_initial_point if num_ansatz_params > 0 else None,
         )
         self.model.to(self.device)
+
+    def select_sampler(self, sampler_device: str = "cpu", default_shots=1024):
+        """
+        Selects the sampler for the QuantumNN model.
+        Currently supports 'gpu' for AerSampler and 'cpu' for Qiskit Sampler.
+        """
+        sampler = None
+        if sampler_device == "gpu":
+            if torch.cuda.is_available():
+                from qiskit_aer.primitives import SamplerV2 as AerSampler
+                sampler = AerSampler(
+                    default_shots=default_shots, 
+                    seed=self.seed,
+                    options={
+                        "backend_options": {"method": "automatic", "device": "GPU", "batched_shots_gpu": True}
+                    },
+                )
+            else:
+                print("Warning: CUDA not available. Falling back to CPU Sampler.")
+                from qiskit.primitives import Sampler
+                sampler = Sampler(options={"shots": default_shots, "seed": self.seed})
+        elif sampler_device == "cpu":
+            from qiskit.primitives import Sampler
+            sampler = Sampler(options={"shots": default_shots, "seed": self.seed})
+        else:
+            raise ValueError(f"Unsupported sampler device: {sampler_device}. Use 'gpu' or 'cpu'.")
+        return sampler
+        
+    @staticmethod
+    def inspect_sampler(sampler):
+        """Print run-time & backend information for any Qiskit Sampler."""
+        print("== Sampler info ==")
+        print("class:", sampler.__module__, sampler.__class__.__name__)
+        print("run options:", sampler.options)             # always exists
+
+        # Aer ≥0.17  →  sampler.backend
+        # Aer ≤0.16  →  sampler._backend   (private, but fall back if needed)
+        backend = getattr(sampler, "backend", None) or getattr(sampler, "_backend", None)
+        if backend is None:
+            print("backend: reference CPU sampler (no backend object).")
+            return
+
+        print("backend:", backend.__class__.__name__)
+        # backend.options is public in current Aer releases
+        if hasattr(backend, "options"):
+            print("backend options:", backend.options)
+
+        # optional GPU/CPU device list (may not exist on CPU backends)
+        if hasattr(backend, "available_devices"):
+            try:
+                print("available devices:", backend.available_devices())
+            except Exception as err:
+                print("available_devices():", err)
+
+
+    def select_gradient(self, gradient_method: str = "param_shift", spsa_epsilon: float = 0.05):
+        """
+        Selects the gradient method for the QuantumNN model.
+        Currently supports 'param_shift' and 'spsa'.
+        """
+        gradient = None
+        if gradient_method == "param_shift":
+            gradient = ParamShiftSamplerGradient(self.sampler)
+        elif gradient_method == "spsa":
+            gradient = SPSASamplerGradient(self.sampler, epsilon=spsa_epsilon)
+        elif gradient_method == "guided_spsa":
+            gradient = GuidedSPSASamplerGradient(
+                self.sampler,
+                N_epochs=100,  # Total number of epochs
+                tau=0.5,      # Fraction of batch for param-shift
+                epsilon=0.8,  # SPSA damping constant
+                k_min_ratio=0.10,  # k_min = θ_len × k_min_ratio
+                k_max_factor=1.5,  # k_max = θ_len × min(1, k_max_factor-tau)
+                seed=self.seed,
+            )
+        else:
+            raise ValueError(f"Unsupported gradient type: {gradient_method}. Use 'param_shift', 'spsa', or 'guided_spsa'.")
+        return gradient
 
     def forward(self, x):
         """
@@ -179,3 +235,11 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         loss = self.criterion(log_probs, yb_processed)
         # For NLLLoss, the input (log_probs) is effectively the "logits"
         return log_probs, loss
+
+    def end_epoch(self):
+        """
+        Advance the guided-SPSA scheduler once per epoch.
+        Safe to call even if another gradient is selected.
+        """
+        if isinstance(self.gradient, GuidedSPSASamplerGradient):
+            self.gradient.step_epoch()
