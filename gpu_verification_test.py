@@ -1,107 +1,62 @@
-#!/usr/bin/env python3
-"""
-GPU-vs-CPU sanity check for Qiskit Aer – with profiling.
-Modified to capture in-run GPU utilization for remote diagnosis.
-"""
-import os, time, cProfile, pstats, contextlib, subprocess, threading
-from qiskit import transpile
-from qiskit.circuit.random import random_circuit
-from qiskit_aer import AerSimulator, AerError
+# verify_gpu_setup.py
+import os
+import sys
+import subprocess
+import platform
+import time
+import pynvml
+import threading
 
-# Attempt to import pynvml, handle gracefully if not present
+print("="*50)
+print(" VERIFYING GPU SETUP INSIDE CONTAINER")
+print("="*50)
+
+# --- System Checks ---
+print("\n--- System Information ---")
+print(f"OS: {platform.system()} {platform.release()}")
+print(f"Python Version: {sys.version}")
+
+# --- NVCC (CUDA Compiler) Check ---
+print("\n--- NVCC (CUDA Compiler) Check ---")
 try:
-    import pynvml
+    result = subprocess.run(["nvcc", "--version"], capture_output=True, text=True, check=True)
+    print("nvcc --version output:")
+    print(result.stdout)
+    if "release" in result.stdout:
+        print("NVCC found. CUDA Toolkit is likely installed in the container.")
+    else:
+        print("NVCC output looks unusual.")
+except FileNotFoundError:
+    print("NVCC not found in PATH. This means the CUDA Toolkit 'devel' tools are not fully configured or missing.")
+    print("While PyTorch/Aer might still run (if runtime libs are there), this is a good sign for comprehensive setup.")
+except subprocess.CalledProcessError as e:
+    print(f"Error running nvcc: {e}\n{e.stderr}")
 
-    _pynvml_available = True
-    pynvml.nvmlInit()  # Initialize NVML once
-except (ModuleNotFoundError, AttributeError):
-    _pynvml_available = False
-    print(
-        "Warning: pynvml not found or failed to initialize. GPU utilization monitoring will be skipped."
-    )
-
-
-# ------------------------------------------------------------
-# 1.  NVML helpers (gracefully skipped if pynvml absent)
-# ------------------------------------------------------------
-def _get_gpu_stats():
-    if not _pynvml_available:
-        return None, None
-    try:
-        h = pynvml.nvmlDeviceGetHandleByIndex(0)
-        mem = pynvml.nvmlDeviceGetMemoryInfo(h)
-        util = pynvml.nvmlDeviceGetUtilizationRates(h)
-        return mem.used / 2**20, util.gpu  # MB, %
-    except pynvml.NVMLError as error:
-        print(f"NVML Error: {error}")
-        return None, None
-    except Exception as e:
-        print(f"Error getting NVML stats: {e}")
-        return None, None
-
-
-@contextlib.contextmanager
-def gpu_monitor_initial_final(label):
-    # This context manager is for before/after snapshots
-    m0, u0 = _get_gpu_stats()
-    if m0 is not None:
-        print(f"[NVML] {label} – before: {m0:,.0f} MB, util {u0}%")
-    yield
-    m1, u1 = _get_gpu_stats()
-    if m1 is not None:
-        print(f"[NVML] {label} – after : {m1:,.0f} MB, util {u1}%\n")
-
-
-# New: Function to monitor GPU during execution
-def _monitor_gpu_in_background(stop_event, interval=0.1):
-    gpu_util_history = []
-    mem_util_history = []
-    print("\n[NVML Monitor] Starting in-run monitoring...")
-    while not stop_event.is_set():
-        m, u = _get_gpu_stats()
-        if m is not None and u is not None:
-            gpu_util_history.append(u)
-            mem_util_history.append(m)
-        time.sleep(interval)
-    print("[NVML Monitor] Stopping in-run monitoring.")
-    return gpu_util_history, mem_util_history
-
-
-# ------------------------------------------------------------
-# 2.  Check installation
-# ------------------------------------------------------------
-print("\n=== Aer installation check ===")
-
-sim_cpu = AerSimulator(method="statevector", device="CPU")
-sim_gpu = None  # Initialize to None
+# --- nvidia-smi Check ---
+print("\n--- nvidia-smi Check (Host GPU visibility) ---")
 try:
-    sim_gpu = AerSimulator(method="statevector", device="GPU")
-    print(f"GPU Backend found: {sim_gpu.status}")
-    print(f"Aer version: {sim_gpu.version}")
-    # Also check if Aer explicitly says it's using CUDA
-    try:
-        from qiskit_aer.backends.aer_simulator import AerSimulator
+    result = subprocess.run(["nvidia-smi"], capture_output=True, text=True, check=True)
+    print("nvidia-smi output:")
+    print(result.stdout)
+    if "NVIDIA-SMI" in result.stdout:
+        print("nvidia-smi successfully executed. GPU visible to container.")
+    else:
+        print("nvidia-smi output looks unusual.")
+except FileNotFoundError:
+    print("nvidia-smi not found. Container does not have NVIDIA GPU tools.")
+    print("Ensure you run docker with --gpus all and use an NVIDIA base image.")
+except subprocess.CalledProcessError as e:
+    print(f"Error running nvidia-smi: {e}\n{e.stderr}")
 
-        print(
-            f"Aer default device for statevector: {AerSimulator.default_options().device}"
-        )
-    except Exception:
-        pass  # Older Aer versions might not have default_options
-except AerError as err:
-    print(f"⚠️  GPU backend NOT found: {err}")
-    print("   Please ensure qiskit-aer-gpu (or -cu11) is installed correctly.")
-    print("   pip install --force-reinstall qiskit-aer-gpu   # CUDA 12.x")
-    print("   pip install --force-reinstall qiskit-aer-gpu-cu11  # CUDA 11.x")
-    # Don't exit, allow CPU run to continue if GPU fails
-except Exception as e:
-    print(f"An unexpected error occurred during GPU backend initialization: {e}")
-    # Don't exit, allow CPU run to continue if GPU fails
+# --- Environment Variables Check ---
+print("\n--- Environment Variables Check ---")
+print(f"LD_LIBRARY_PATH: {os.environ.get('LD_LIBRARY_PATH', 'Not set')}")
+# Expect this to contain paths like /usr/local/cuda/lib64
 
-# Add a check for PyTorch CUDA visibility
+# --- PyTorch CUDA Check (Your existing excellent check) ---
+print("\n=== PyTorch CUDA Check ===")
 try:
     import torch
-
-    print(f"\n=== PyTorch CUDA Check ===")
     print(f"PyTorch CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"PyTorch CUDA device count: {torch.cuda.device_count()}")
@@ -109,105 +64,96 @@ try:
             print(f"PyTorch CUDA current device: {torch.cuda.current_device()}")
             print(f"PyTorch CUDA device name: {torch.cuda.get_device_name(0)}")
             print(f"PyTorch CUDA version: {torch.version.cuda}")
+            # Verify PyTorch CUDA version matches expected 12.x
+            if not torch.version.cuda.startswith('12'):
+                print(f"WARNING: PyTorch CUDA version {torch.version.cuda} does not start with 12. Expecting 12.x.")
+        else:
+            print("PyTorch CUDA available but no devices found. (Unusual)")
     else:
-        print(
-            "PyTorch CUDA not available. This might indicate a system-level CUDA issue."
-        )
+        print("PyTorch CUDA NOT available. This is a critical issue for GPU usage.")
 except ImportError:
     print("PyTorch not installed. Skipping PyTorch CUDA check.")
+except Exception as e:
+    print(f"Error during PyTorch CUDA check: {e}")
 
-# ------------------------------------------------------------
-# 3.  Build an n-qubit test circuit
-# ------------------------------------------------------------
-n_qubits, depth = 28, 40  # Changed to 28 for testing GPU sweet spot
-qc = random_circuit(n_qubits, depth, measure=False, seed=0)
-# print(qc.draw(idle_wires=False, fold=-1))
+# --- Qiskit Aer GPU Backend Initialization Check ---
+print("\n=== Qiskit Aer GPU Backend Check ===")
+try:
+    from qiskit_aer import AerSimulator, AerError
+    print("Attempting to initialize AerSimulator with device='GPU'...")
+    sim_gpu = AerSimulator(method="statevector", device="GPU")
+    print(f"AerSimulator GPU backend initialized successfully: {sim_gpu.status}")
+    print(f"Aer version: {sim_gpu.version}")
+    print(f"Aer default device for statevector: {AerSimulator.default_options().device}")
 
+    # Small test run to trigger actual GPU usage and monitor utilization
+    print("\n--- Running a small Qiskit Aer GPU test simulation (N=28, D=40) ---")
+    from qiskit.circuit.random import random_circuit
+    from qiskit import transpile
 
-def run_and_time(sim, label, n_qubits_val, depth_val):
-    qc_local = random_circuit(n_qubits_val, depth_val, measure=False, seed=0)
-    circ = transpile(qc_local, sim)
+    n_qubits, depth = 28, 40
+    qc = random_circuit(n_qubits, depth, measure=False, seed=0)
+    circ = transpile(qc, sim_gpu)
 
-    print(f"\n--- Running {label} (N={n_qubits_val}, D={depth_val}) ---")
-
+    # In-run GPU monitoring
+    stop_event = threading.Event() # Define stop_event here
     gpu_util_history = []
     mem_util_history = []
-    stop_event = threading.Event()
-    monitor_thread = None
 
-    if (
-        _pynvml_available and label == "GPU"
-    ):  # Only monitor GPU when running GPU backend
-        monitor_thread = threading.Thread(
-            target=lambda: (
-                gpu_util_history.extend(_monitor_gpu_in_background(stop_event)[0]),
-                mem_util_history.extend(_monitor_gpu_in_background(stop_event)[1]),
-            )
-        )
-        monitor_thread.start()
+    def _monitor_gpu_in_background_local(stop_event, interval=0.1):
+        try:
+            pynvml.nvmlInit() # Re-initialize for this thread
+            h = pynvml.nvmlDeviceGetHandleByIndex(0)
+            while not stop_event.is_set():
+                mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+                util = pynvml.nvmlDeviceGetUtilizationRates(h)
+                gpu_util_history.append(util.gpu)
+                mem_util_history.append(mem.used / 2**20)
+                time.sleep(interval)
+        except pynvml.NVMLError as error:
+            print(f"NVML Monitor Thread Error: {error}")
+        except Exception as e:
+            print(f"Monitor thread unexpected error: {e}")
+        finally:
+            try:
+                pynvml.nvmlShutdown() # Shutdown for this thread
+            except: pass # Ignore if already shutdown
 
-    with gpu_monitor_initial_final(
-        label
-    ):  # This context handles initial/final NVML snapshot
-        pr = cProfile.Profile()
-        pr.enable()
-        t0 = time.perf_counter()
-        job = sim.run(circ)
-        res = job.result()  # Make sure to get the result to ensure full computation
-        dt = time.perf_counter() - t0
-        pr.disable()
-
-    if monitor_thread:
-        stop_event.set()
-        monitor_thread.join()
-        # Process and print in-run utilization
-        if gpu_util_history:
-            avg_gpu_util = sum(gpu_util_history) / len(gpu_util_history)
-            max_gpu_util = max(gpu_util_history)
-            print(
-                f"[NVML In-Run] Avg GPU Util: {avg_gpu_util:.1f}%, Max GPU Util: {max_gpu_util:.1f}%"
-            )
-        if mem_util_history:
-            avg_mem_used = sum(mem_util_history) / len(mem_util_history)
-            print(f"[NVML In-Run] Avg Mem Used: {avg_mem_used:,.0f} MB")
-
-    print(f"{label:4s} elapsed : {dt:7.3f} s   backend={job.backend().name}")
-    pstats.Stats(pr).strip_dirs().sort_stats("cumtime").print_stats(6)
-    return dt
-
-
-print("\n=== Timing & profiling ===")
-cpu_t = run_and_time(sim_cpu, "CPU", n_qubits, depth)
-if sim_gpu:  # Only run GPU if it initialized successfully
-    gpu_t = run_and_time(sim_gpu, "GPU", n_qubits, depth)
-else:
-    gpu_t = None
-
-# ------------------------------------------------------------
-# 4.  Summary
-# ------------------------------------------------------------
-if gpu_t is not None:
-    speedup = cpu_t / gpu_t
-    print(
-        f"\n=== Summary ===\nCPU {cpu_t:7.3f} s   GPU {gpu_t:7.3f} s   → speed-up ×{speedup:.2f}"
+    import threading
+    monitor_thread = threading.Thread(
+        target=_monitor_gpu_in_background_local, args=(stop_event,)
     )
-else:
-    print(f"\n=== Summary ===\nCPU {cpu_t:7.3f} s   GPU backend not available.")
+    monitor_thread.start()
 
-print("\n--- Troubleshooting Guide ---")
-print(
-    "1. If 'Avg GPU Util' is low (<50-60%) during the GPU run, the GPU is not being effectively used."
-)
-print("2. Check 'Aer default device for statevector:' above. It should be 'GPU'.")
-print("3. Ensure 'PyTorch CUDA available' is True and device name matches your V100.")
-print(
-    "4. Verify your system's CUDA Toolkit version matches the qiskit-aer-gpu package (e.g., cu11 or default for CUDA 12.x)."
-)
-print(
-    "5. For N=8-24, overhead might dominate. For N=30+, memory limits can occur on 32GB V100."
-)
-print("   Try N_qubits = 28 or 29 to test the optimal GPU sweet spot on a 32GB V100.")
+    t0 = time.perf_counter()
+    job = sim_gpu.run(circ)
+    res = job.result() # Crucial to wait for results
+    dt = time.perf_counter() - t0
+    stop_event.set()
+    monitor_thread.join()
 
-# Final NVML shutdown
-if _pynvml_available:
-    pynvml.nvmlShutdown()
+    print(f"Test run elapsed: {dt:.3f} s")
+    if gpu_util_history:
+        avg_gpu_util = sum(gpu_util_history) / len(gpu_util_history)
+        max_gpu_util = max(gpu_util_history)
+        print(f"[NVML In-Run] Avg GPU Util: {avg_gpu_util:.1f}%, Max GPU Util: {max_gpu_util:.1f}%")
+    if mem_util_history:
+        avg_mem_used = sum(mem_util_history) / len(mem_util_history)
+        print(f"[NVML In-Run] Avg Mem Used: {avg_mem_used:,.0f} MB")
+
+    if avg_gpu_util > 50.0: # Threshold for 'good' utilization
+        print("STATUS: GPU utilization is GOOD for test run. Aer GPU backend appears functional.")
+    else:
+        print("STATUS: GPU utilization is LOW for test run. Aer GPU backend may not be engaging GPU effectively.")
+
+except AerError as err:
+    print(f"Aer GPU backend initialization FAILED: {err}")
+    print("This indicates a severe problem with the qiskit-aer-gpu installation/compatibility.")
+except ImportError:
+    print("Qiskit Aer not installed. Skipping Aer checks.")
+except Exception as e:
+    print(f"An unexpected error occurred during Aer GPU check: {e}")
+
+print("="*50)
+print(" VERIFICATION COMPLETE")
+print("="*50)
