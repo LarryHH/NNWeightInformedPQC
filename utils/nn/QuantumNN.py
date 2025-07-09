@@ -40,6 +40,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         default_shots: int = 1024,
         gradient_method: str = "param_shift",  # Default gradient method
         spsa_epsilon: float = 0.05,  # Default epsilon for SPSA
+        guided_spsa_N_epochs: int = 100,  # Total number of epochs for guided SPSA
     ):
         """
         Initializes the QuantumNN model.
@@ -75,7 +76,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
             self.sampler = self.select_sampler(sampler_device="cpu", default_shots=default_shots)
         
         self.inspect_sampler(self.sampler)
-        self.gradient = self.select_gradient(gradient_method, spsa_epsilon)
+        self.gradient = self.select_gradient(gradient_method, spsa_epsilon, guided_spsa_N_epochs)
         
         qnn = SamplerQNN(
             circuit=qc,
@@ -159,7 +160,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
                 print("available_devices():", err)
 
 
-    def select_gradient(self, gradient_method: str = "param_shift", spsa_epsilon: float = 0.05):
+    def select_gradient(self, gradient_method: str = "param_shift", spsa_epsilon: float = 0.05, guided_spsa_N_epochs: int = 100):
         """
         Selects the gradient method for the QuantumNN model.
         Currently supports 'param_shift' and 'spsa'.
@@ -172,9 +173,9 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         elif gradient_method == "guided_spsa":
             gradient = GuidedSPSASamplerGradient(
                 self.sampler,
-                N_epochs=100,  # Total number of epochs
-                tau=0.5,      # Fraction of batch for param-shift
-                epsilon=0.8,  # SPSA damping constant
+                N_epochs=guided_spsa_N_epochs,  # Total number of epochs
+                tau=0.7,      # Fraction of batch for param-shift
+                epsilon=1.0,  # SPSA damping constant
                 k_min_ratio=0.10,  # k_min = θ_len × k_min_ratio
                 k_max_factor=1.5,  # k_max = θ_len × min(1, k_max_factor-tau)
                 seed=self.seed,
