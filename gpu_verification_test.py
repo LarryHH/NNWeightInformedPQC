@@ -153,7 +153,6 @@ try:
     try:
         sim_gpu = AerSimulator(method="statevector", device="GPU")
         print(f"\nGPU backend initialized: {sim_gpu.status}")
-        print(f"Aer default device for statevector: {sim_gpu.default_options().device}") # Using default_options() as it's part of the class
         gpu_t = run_and_time_sim(sim_gpu, "GPU", n_qubits, depth)
 
         # --- Summary ---
