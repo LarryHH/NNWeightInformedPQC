@@ -1,10 +1,3 @@
-You are absolutely correct\! My apologies. In the process of streamlining the `verify_gpu_setup.py` script to focus on the immediate GPU setup, I inadvertently removed the CPU comparison logic.
-
-Let's put that back in, as it's essential for seeing the speedup (or lack thereof) and for verifying the CPU path still works correctly.
-
-Here's the revised `verify_gpu_setup.py` that includes the CPU comparison:
-
-```python
 # verify_gpu_setup.py
 import os
 import sys
