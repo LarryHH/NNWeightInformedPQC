@@ -173,7 +173,7 @@ for n_qubits in range(2, 8, 2): # Range from 2 to 28, step 2
 
     #try:
     qnn_cpu = QuantumNN(
-        ansatz=ansatz_instance,
+        ansatz=ansatz_instance.get_ansatz(),
         n_qubits=n_qubits,
         num_classes=num_classes,
         use_gpu=False,
