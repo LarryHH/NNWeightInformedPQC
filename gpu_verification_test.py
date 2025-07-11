@@ -181,7 +181,6 @@ for n_qubits in range(2, 29, 2):
         try:
             sim_gpu = AerSimulator(method="statevector", device="GPU")
             print(f"\nGPU backend initialized: {sim_gpu.status}")
-            print(f"Aer default device for statevector: {sim_gpu.default_options().device}")
             gpu_run_t, gpu_transpile_t, avg_gpu_util, avg_mem_used = run_and_time_sim(sim_gpu, "GPU", n_qubits, depth)
             sim_gpu_status = "Success"
 
