@@ -119,7 +119,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
                     default_shots=default_shots, 
                     seed=self.seed,
                     options={
-                        "backend_options": {"method": "automatic", "device": "GPU", "batched_shots_gpu": True}
+                        "backend_options": {"method": "statevector", "device": "GPU", "batched_shots_gpu": True}
                     },
                 )
             else:
