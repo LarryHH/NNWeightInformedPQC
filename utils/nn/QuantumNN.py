@@ -6,6 +6,8 @@ import qiskit
 from qiskit import QuantumCircuit
 from qiskit.circuit.library import TwoLocal, ZZFeatureMap
 from qiskit.primitives import StatevectorSampler, Sampler
+from qiskit_aer.primitives import SamplerV2 as AerSampler
+from qiskit_aer import AerSimulator
 from qiskit_machine_learning.neural_networks import SamplerQNN
 from qiskit_machine_learning.connectors import TorchConnector
 from qiskit_machine_learning.gradients import (
@@ -79,7 +81,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         self.gradient = self.select_gradient(gradient_method, spsa_epsilon, guided_spsa_N_epochs)
         
         if use_gpu:
-            transpiled_circuit = transpile(qc, backend=self.sampler.backend, optimization_level=3)
+            transpiled_circuit = transpile(qc, backend=AerSimulator(backend_options={"method": "statevector", "device": "GPU", "batched_shots_gpu": True}), optimization_level=3)
             qc = transpiled_circuit
 
         qnn = SamplerQNN(
@@ -118,7 +120,6 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         sampler = None
         if sampler_device == "gpu":
             if torch.cuda.is_available():
-                from qiskit_aer.primitives import SamplerV2 as AerSampler
                 sampler = AerSampler(
                     default_shots=default_shots, 
                     seed=self.seed,
