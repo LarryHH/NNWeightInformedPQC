@@ -180,7 +180,7 @@ for n_qubits in range(2, 8, 2): # Range from 2 to 28, step 2
         default_shots=default_shots,
         gradient_method="param_shift"
     )
-    print(f"CPU QNN initialized. Sampler: {qnn_cpu.sampler_device_str}")
+    print(f"CPU QNN initialized. Sampler: {qnn_cpu.sampler}")
 
     # Time forward pass
     t0_forward = time.perf_counter()
