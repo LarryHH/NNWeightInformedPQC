@@ -53,7 +53,7 @@ print("\n--- Environment Variables Check ---")
 print(f"LD_LIBRARY_PATH: {os.environ.get('LD_LIBRARY_PATH', 'Not set')}")
 # Expect this to contain paths like /usr/local/cuda/lib64
 
-# --- PyTorch CUDA Check (Your existing excellent check) ---
+# --- PyTorch CUDA Check ---
 print("\n=== PyTorch CUDA Check ===")
 try:
     import torch
@@ -87,7 +87,16 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
     print(f"\n--- Running {label} (N={n_qubits_val}, D={depth_val}) ---")
 
     qc_local = random_circuit(n_qubits_val, depth_val, measure=False, seed=0)
+
+    # --- MEASURE TRANSPILE TIME ---
+    t_transpile_start = time.perf_counter()
+    # Adding optimization_level=0 to keep transpilation simple and fast for benchmarking simulation
     circ = transpile(qc_local, sim_instance, optimization_level=0)
+    # Add save_statevector to ensure the statevector is explicitly computed and stored
+    circ.save_statevector()
+    t_transpile_end = time.perf_counter()
+    dt_transpile = t_transpile_end - t_transpile_start
+    print(f"{label:4s} transpile time: {dt_transpile:7.3f} s")
 
     gpu_util_history = []
     mem_util_history = []
@@ -103,7 +112,7 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
                     mem = pynvml.nvmlDeviceGetMemoryInfo(h)
                     util = pynvml.nvmlDeviceGetUtilizationRates(h)
                     gpu_util_history.append(util.gpu)
-                    mem_util_history.append(mem.used / 2**20)
+                    mem_util_history.append(mem.used / 2**20) # Convert to MB
                     time.sleep(interval)
             except pynvml.NVMLError as error:
                 print(f"NVML Monitor Thread Error: {error}")
@@ -119,11 +128,12 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
         )
         monitor_thread.start()
 
-    t0 = time.perf_counter()
-    circ.save_statevector()          # forces allocation of 2**n amplitudes
+    # --- MEASURE RUN (SIMULATION) TIME ---
+    t_run_start = time.perf_counter()
     job = sim_instance.run(circ)
     res = job.result() # Crucial to wait for results
-    dt = time.perf_counter() - t0
+    t_run_end = time.perf_counter()
+    dt_run = t_run_end - t_run_start
 
     if monitor_thread:
         stop_event.set()
@@ -136,51 +146,62 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
             avg_mem_used = sum(mem_util_history) / len(mem_util_history)
             print(f"[NVML In-Run] Avg Mem Used: {avg_mem_used:,.0f} MB")
 
-    print(f"{label:4s} elapsed : {dt:7.3f} s   backend={job.backend().name}")
-    return dt
+    print(f"{label:4s} run time    : {dt_run:7.3f} s   backend={job.backend().name}")
+    return dt_run, dt_transpile # Return both for detailed summary
 
 try:
     from qiskit_aer import AerSimulator, AerError
 
-    n_qubits, depth = 24, 40 # Qubit count for the test
+    # Set N_QUBITS to a value that should benefit from GPU and fit in memory
+    # 30 qubits: ~34 GB statevector, fits 80GB A100
+    # 31 qubits: ~68 GB statevector, also fits, might show even more GPU benefit
+    n_qubits, depth = 24, 40 # Changed from 24 to 30
 
     # --- Initialize CPU Simulator ---
     sim_cpu = AerSimulator(method="statevector", device="CPU")
     print(f"CPU backend initialized: {sim_cpu.status}")
-    cpu_t = run_and_time_sim(sim_cpu, "CPU", n_qubits, depth)
+    cpu_run_t, cpu_transpile_t = run_and_time_sim(sim_cpu, "CPU", n_qubits, depth)
 
     # --- Initialize GPU Simulator ---
     sim_gpu = None
     try:
         sim_gpu = AerSimulator(method="statevector", device="GPU")
         print(f"\nGPU backend initialized: {sim_gpu.status}")
-        gpu_t = run_and_time_sim(sim_gpu, "GPU", n_qubits, depth)
+        print(f"Aer default device for statevector: {sim_gpu.default_options().device}")
+        gpu_run_t, gpu_transpile_t = run_and_time_sim(sim_gpu, "GPU", n_qubits, depth)
 
         # --- Summary ---
-        if gpu_t is not None:
-            speedup = cpu_t / gpu_t
-            print(f"\n=== Summary ===\nCPU {cpu_t:7.3f} s   GPU {gpu_t:7.3f} s   → speed-up ×{speedup:.2f}")
+        if gpu_run_t is not None:
+            speedup = cpu_run_t / gpu_run_t
+            print(f"\n=== Summary (Simulation Run Time Only) ===\nCPU Run: {cpu_run_t:7.3f} s   GPU Run: {gpu_run_t:7.3f} s   → speed-up ×{speedup:.2f}")
+            print(f"CPU Transpile: {cpu_transpile_t:7.3f} s   GPU Transpile: {gpu_transpile_t:7.3f} s")
+
             if speedup > 1.0:
-                print("STATUS: GPU is FASTER than CPU. GPU backend is likely working.")
-            elif speedup > 0.5: # e.g., 0.5 means GPU is up to 2x slower
-                print("STATUS: GPU is SLIGHTLY SLOWER or similar to CPU. Overhead may still be dominating.")
+                print("STATUS: GPU Run is FASTER than CPU Run. GPU backend is working for simulation.")
+            elif speedup > 0.5:
+                print("STATUS: GPU Run is SLIGHTLY SLOWER or similar to CPU Run. Overhead may still be present.")
             else:
-                print("STATUS: GPU is SIGNIFICANTLY SLOWER than CPU. Check GPU utilization.")
+                print("STATUS: GPU Run is SIGNIFICANTLY SLOWER than CPU Run. This is unexpected for high N and high GPU util.")
         else:
-            print(f"\n=== Summary ===\nCPU {cpu_t:7.3f} s   GPU backend not available for comparison.")
+            print(f"\n=== Summary ===\nCPU Run: {cpu_run_t:7.3f} s   GPU backend not available for comparison.")
 
         # Final check on GPU utilization status
-        if 'avg_gpu_util' in locals() and avg_gpu_util < 50.0 and gpu_t is not None and speedup < 1.0:
+        # Note: avg_gpu_util is only available if GPU run was attempted
+        if 'avg_gpu_util' in locals() and avg_gpu_util > 50.0 and gpu_run_t is not None and speedup < 1.0:
+             print("FINAL DIAGNOSIS: GPU backend initialized, utilized, but still slower than CPU for run time.")
+             print("This suggests a performance bottleneck within Qiskit Aer's GPU kernels for this N or circuit type.")
+        elif 'avg_gpu_util' in locals() and avg_gpu_util <= 50.0 and gpu_run_t is not None:
              print("FINAL DIAGNOSIS: GPU backend initialized, but GPU utilization was low.")
-             print("This indicates that Qiskit Aer is not effectively using the GPU for computation.")
+             print("This indicates that Qiskit Aer is not effectively using the GPU for computation for this N.")
+
 
     except AerError as err:
         print(f"Aer GPU backend initialization FAILED: {err}")
         print("This indicates a severe problem with the qiskit-aer-gpu installation/compatibility.")
-        print(f"\n=== Summary ===\nCPU {cpu_t:7.3f} s   GPU backend not available.")
+        print(f"\n=== Summary ===\nCPU Run: {cpu_run_t:7.3f} s   GPU backend not available.")
     except Exception as e:
         print(f"An unexpected error occurred during Aer GPU test: {e}")
-        print(f"\n=== Summary ===\nCPU {cpu_t:7.3f} s   GPU test incomplete.")
+        print(f"\n=== Summary ===\nCPU Run: {cpu_run_t:7.3f} s   GPU test incomplete.")
 
 except ImportError:
     print("Qiskit Aer not installed. Skipping Aer checks and timing.")
