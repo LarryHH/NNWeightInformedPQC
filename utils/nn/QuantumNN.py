@@ -81,7 +81,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         self.gradient = self.select_gradient(gradient_method, spsa_epsilon, guided_spsa_N_epochs)
         
         if use_gpu:
-            transpiled_circuit = transpile(qc, backend=AerSimulator(backend_options={"method": "statevector", "device": "GPU", "batched_shots_gpu": True}), optimization_level=3)
+            transpiled_circuit = transpile(qc, backend=AerSimulator(backend_options={"device": "GPU"}), optimization_level=3)
             qc = transpiled_circuit
 
         qnn = SamplerQNN(
