@@ -78,6 +78,10 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         self.inspect_sampler(self.sampler)
         self.gradient = self.select_gradient(gradient_method, spsa_epsilon, guided_spsa_N_epochs)
         
+        if use_gpu:
+            transpiled_circuit = transpile(qc, backend=self.sampler.backend, optimization_level=3)
+            qc = transpiled_circuit
+
         qnn = SamplerQNN(
             circuit=qc,
             input_params=feature_map.parameters,  # Parameters of the feature map
