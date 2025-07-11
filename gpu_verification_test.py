@@ -6,6 +6,7 @@ import platform
 import time
 import pynvml
 import threading
+import pandas as pd # Added for storing results in a table
 
 print("="*50)
 print(" VERIFYING GPU SETUP INSIDE CONTAINER")
@@ -77,7 +78,7 @@ except Exception as e:
     print(f"Error during PyTorch CUDA check: {e}")
 
 # --- Qiskit Aer Backend Initialization and Timing Check ---
-print("\n=== Qiskit Aer Backend Check and Timing ===")
+print("\n=== Qiskit Aer Backend Check and Timing (Iterating Qubit Counts) ===")
 
 # Define a helper function to run and time simulations
 def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
@@ -115,17 +116,22 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
                     mem_util_history.append(mem.used / 2**20) # Convert to MB
                     time.sleep(interval)
             except pynvml.NVMLError as error:
-                print(f"NVML Monitor Thread Error: {error}")
+                # NVML can sometimes fail if device goes away or driver issues
+                print(f"NVML Monitor Thread Error: {error}. Monitoring stopped.")
+                break # Exit loop on error
             except Exception as e:
-                print(f"Monitor thread unexpected error: {e}")
+                print(f"Monitor thread unexpected error: {e}. Monitoring stopped.")
+                break # Exit loop on error
             finally:
+                # Ensure shutdown is called on thread exit
                 try:
                     pynvml.nvmlShutdown()
-                except: pass
+                except: pass # Ignore if already shutdown or not initialized
 
         monitor_thread = threading.Thread(
             target=_monitor_gpu_in_background_local, args=(stop_event,)
         )
+        monitor_thread.daemon = True # Allow main program to exit even if thread is running
         monitor_thread.start()
 
     # --- MEASURE RUN (SIMULATION) TIME ---
@@ -137,7 +143,9 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
 
     if monitor_thread:
         stop_event.set()
-        monitor_thread.join()
+        monitor_thread.join(timeout=10) # Give thread some time to finish gracefully
+        if monitor_thread.is_alive():
+            print("Warning: GPU monitoring thread did not terminate gracefully.")
         if gpu_util_history:
             avg_gpu_util = sum(gpu_util_history) / len(gpu_util_history)
             max_gpu_util = max(gpu_util_history)
@@ -147,33 +155,49 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
             print(f"[NVML In-Run] Avg Mem Used: {avg_mem_used:,.0f} MB")
 
     print(f"{label:4s} run time    : {dt_run:7.3f} s   backend={job.backend().name}")
-    return dt_run, dt_transpile # Return both for detailed summary
+    # Return both times for detailed summary, along with GPU metrics
+    return dt_run, dt_transpile, avg_gpu_util if 'avg_gpu_util' in locals() else None, avg_mem_used if 'avg_mem_used' in locals() else None
 
-try:
-    from qiskit_aer import AerSimulator, AerError
+# List to store results for a DataFrame
+results_data = []
+depth = 40 # Constant depth for all qubit counts
 
-    # Set N_QUBITS to a value that should benefit from GPU and fit in memory
-    # 30 qubits: ~34 GB statevector, fits 80GB A100
-    # 31 qubits: ~68 GB statevector, also fits, might show even more GPU benefit
-    n_qubits, depth = 24, 40 # Changed from 24 to 30
+# Qubit counts to iterate through
+# Adjusted to be inclusive of 2 and 28, step 2
+for n_qubits in range(2, 29, 2):
+    print(f"\n{'='*20} TESTING N_QUBITS = {n_qubits} {'='*20}")
 
-    # --- Initialize CPU Simulator ---
-    sim_cpu = AerSimulator(method="statevector", device="CPU")
-    print(f"CPU backend initialized: {sim_cpu.status}")
-    cpu_run_t, cpu_transpile_t = run_and_time_sim(sim_cpu, "CPU", n_qubits, depth)
-
-    # --- Initialize GPU Simulator ---
-    sim_gpu = None
     try:
-        sim_gpu = AerSimulator(method="statevector", device="GPU")
-        print(f"\nGPU backend initialized: {sim_gpu.status}")
-        print(f"Aer default device for statevector: {sim_gpu.default_options().device}")
-        gpu_run_t, gpu_transpile_t = run_and_time_sim(sim_gpu, "GPU", n_qubits, depth)
+        from qiskit_aer import AerSimulator, AerError
 
-        # --- Summary ---
-        if gpu_run_t is not None:
+        # --- Initialize CPU Simulator ---
+        sim_cpu = AerSimulator(method="statevector", device="CPU")
+        print(f"CPU backend initialized: {sim_cpu.status}")
+        cpu_run_t, cpu_transpile_t, _, _ = run_and_time_sim(sim_cpu, "CPU", n_qubits, depth)
+
+        # --- Initialize GPU Simulator ---
+        sim_gpu_status = "Not run"
+        gpu_run_t, gpu_transpile_t, avg_gpu_util, avg_mem_used = None, None, None, None
+        try:
+            sim_gpu = AerSimulator(method="statevector", device="GPU")
+            print(f"\nGPU backend initialized: {sim_gpu.status}")
+            gpu_run_t, gpu_transpile_t, avg_gpu_util, avg_mem_used = run_and_time_sim(sim_gpu, "GPU", n_qubits, depth)
+            sim_gpu_status = "Success"
+
+        except AerError as err:
+            sim_gpu_status = f"FAILED: {err}"
+            print(f"Aer GPU backend initialization FAILED for N={n_qubits}: {err}")
+            print("This indicates a severe problem with the qiskit-aer-gpu installation/compatibility.")
+        except Exception as e:
+            sim_gpu_status = f"ERROR: {e}"
+            print(f"An unexpected error occurred during Aer GPU test for N={n_qubits}: {e}")
+
+        # --- Summary for current qubit count ---
+        speedup = None
+        if gpu_run_t is not None and cpu_run_t is not None:
             speedup = cpu_run_t / gpu_run_t
-            print(f"\n=== Summary (Simulation Run Time Only) ===\nCPU Run: {cpu_run_t:7.3f} s   GPU Run: {gpu_run_t:7.3f} s   → speed-up ×{speedup:.2f}")
+            print(f"\n=== Summary for N={n_qubits} (Simulation Run Time Only) ===")
+            print(f"CPU Run: {cpu_run_t:7.3f} s   GPU Run: {gpu_run_t:7.3f} s   → speed-up ×{speedup:.2f}")
             print(f"CPU Transpile: {cpu_transpile_t:7.3f} s   GPU Transpile: {gpu_transpile_t:7.3f} s")
 
             if speedup > 1.0:
@@ -183,32 +207,48 @@ try:
             else:
                 print("STATUS: GPU Run is SIGNIFICANTLY SLOWER than CPU Run. This is unexpected for high N and high GPU util.")
         else:
-            print(f"\n=== Summary ===\nCPU Run: {cpu_run_t:7.3f} s   GPU backend not available for comparison.")
+            print(f"\n=== Summary for N={n_qubits} ===\nCPU Run: {cpu_run_t:7.3f} s   GPU backend not available for comparison.")
 
-        # Final check on GPU utilization status
-        # Note: avg_gpu_util is only available if GPU run was attempted
-        if 'avg_gpu_util' in locals() and avg_gpu_util > 50.0 and gpu_run_t is not None and speedup < 1.0:
-             print("FINAL DIAGNOSIS: GPU backend initialized, utilized, but still slower than CPU for run time.")
-             print("This suggests a performance bottleneck within Qiskit Aer's GPU kernels for this N or circuit type.")
-        elif 'avg_gpu_util' in locals() and avg_gpu_util <= 50.0 and gpu_run_t is not None:
-             print("FINAL DIAGNOSIS: GPU backend initialized, but GPU utilization was low.")
-             print("This indicates that Qiskit Aer is not effectively using the GPU for computation for this N.")
+        # Store results for DataFrame
+        results_data.append({
+            'N_Qubits': n_qubits,
+            'CPU_Run_Time_s': cpu_run_t,
+            'CPU_Transpile_Time_s': cpu_transpile_t,
+            'GPU_Run_Time_s': gpu_run_t,
+            'GPU_Transpile_Time_s': gpu_transpile_t,
+            'Speedup_Factor': speedup,
+            'Avg_GPU_Util_percent': avg_gpu_util,
+            'Avg_Mem_Used_MB': avg_mem_used,
+            'GPU_Status': sim_gpu_status
+        })
 
-
-    except AerError as err:
-        print(f"Aer GPU backend initialization FAILED: {err}")
-        print("This indicates a severe problem with the qiskit-aer-gpu installation/compatibility.")
-        print(f"\n=== Summary ===\nCPU Run: {cpu_run_t:7.3f} s   GPU backend not available.")
+    except ImportError:
+        print(f"Qiskit Aer not installed for N={n_qubits}. Skipping this iteration.")
+        results_data.append({'N_Qubits': n_qubits, 'GPU_Status': 'Qiskit Aer not installed'})
     except Exception as e:
-        print(f"An unexpected error occurred during Aer GPU test: {e}")
-        print(f"\n=== Summary ===\nCPU Run: {cpu_run_t:7.3f} s   GPU test incomplete.")
+        print(f"An unexpected error occurred during N={n_qubits} setup: {e}")
+        results_data.append({'N_Qubits': n_qubits, 'GPU_Status': f'Unexpected Error: {e}'})
 
-except ImportError:
-    print("Qiskit Aer not installed. Skipping Aer checks and timing.")
-except Exception as e:
-    print(f"An unexpected error occurred during initial Qiskit Aer setup: {e}")
-
-
+print("\n"+"="*50)
+print(" VERIFICATION COMPLETE - SUMMARY TABLE")
 print("="*50)
-print(" VERIFICATION COMPLETE")
+
+# Print results in a nice table
+try:
+    results_df = pd.DataFrame(results_data)
+    # Order columns nicely
+    results_df = results_df[[
+        'N_Qubits', 'CPU_Run_Time_s', 'GPU_Run_Time_s', 'Speedup_Factor',
+        'CPU_Transpile_Time_s', 'GPU_Transpile_Time_s',
+        'Avg_GPU_Util_percent', 'Avg_Mem_Used_MB', 'GPU_Status'
+    ]]
+    print(results_df.to_markdown(index=False, floatfmt=".3f"))
+    # Save to CSV for easy analysis outside
+    results_df.to_csv("gpu_benchmark_results.csv", index=False)
+    print("\nResults also saved to gpu_benchmark_results.csv")
+except Exception as e:
+    print(f"Error generating summary table: {e}")
+
+print("\n"+"="*50)
+print(" END OF SCRIPT")
 print("="*50)
