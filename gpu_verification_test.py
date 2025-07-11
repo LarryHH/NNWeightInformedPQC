@@ -109,7 +109,7 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
             try:
                 pynvml.nvmlInit()
                 h = pynvml.nvmlDeviceGetHandleByIndex(0)
-                while not stop_event.is_set():
+                while not stop_event.is_set(): # This is the loop
                     mem = pynvml.nvmlDeviceGetMemoryInfo(h)
                     util = pynvml.nvmlDeviceGetUtilizationRates(h)
                     gpu_util_history.append(util.gpu)
@@ -118,10 +118,10 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
             except pynvml.NVMLError as error:
                 # NVML can sometimes fail if device goes away or driver issues
                 print(f"NVML Monitor Thread Error: {error}. Monitoring stopped.")
-                break # Exit loop on error
+                return # Changed 'break' to 'return'
             except Exception as e:
                 print(f"Monitor thread unexpected error: {e}. Monitoring stopped.")
-                break # Exit loop on error
+                return # Changed 'break' to 'return'
             finally:
                 # Ensure shutdown is called on thread exit
                 try:
@@ -181,6 +181,7 @@ for n_qubits in range(2, 29, 2):
         try:
             sim_gpu = AerSimulator(method="statevector", device="GPU")
             print(f"\nGPU backend initialized: {sim_gpu.status}")
+            print(f"Aer default device for statevector: {sim_gpu.default_options().device}")
             gpu_run_t, gpu_transpile_t, avg_gpu_util, avg_mem_used = run_and_time_sim(sim_gpu, "GPU", n_qubits, depth)
             sim_gpu_status = "Success"
 
