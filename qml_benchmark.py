@@ -170,69 +170,70 @@ for n_qubits in range(2, 8, 2): # Range from 2 to 28, step 2
     # --- Benchmark CPU QNN ---
     cpu_qnn_status = "Not run"
     cpu_forward_t, cpu_backward_t = None, None
-    try:
-        qnn_cpu = QuantumNN(
-            ansatz=ansatz_instance,
-            n_qubits=n_qubits,
-            num_classes=num_classes,
-            use_gpu=False,
-            default_shots=default_shots,
-            gradient_method="param_shift"
-        )
-        print(f"CPU QNN initialized. Sampler: {qnn_cpu.sampler_device_str}")
 
-        # Time forward pass
-        t0_forward = time.perf_counter()
-        _ = qnn_cpu(xb) # Run forward pass, ignore output
-        t1_forward = time.perf_counter()
-        cpu_forward_t = t1_forward - t0_forward
+    #try:
+    qnn_cpu = QuantumNN(
+        ansatz=ansatz_instance,
+        n_qubits=n_qubits,
+        num_classes=num_classes,
+        use_gpu=False,
+        default_shots=default_shots,
+        gradient_method="param_shift"
+    )
+    print(f"CPU QNN initialized. Sampler: {qnn_cpu.sampler_device_str}")
 
-        # Time backward pass (requires a dummy loss and optimizer)
-        # Note: qnn_cpu(xb) has already been called for forward timing.
-        # Calling it again for backward would add redundant forward computation to backward time.
-        # Instead, we just take the last computed log_probs from the previous forward pass
-        # for loss calculation, and then time its backward.
-        # However, to be fully representative of a training step, we'll run a full _train_batch
-        # which includes forward and backward, and extract backward from it if needed,
-        # or just time the _train_batch as a whole.
-        # For simplicity in this benchmark, let's explicitly run a separate forward and backward pass.
-        # To get the backward pass only time, you usually need to separate it from the forward pass.
-        # Given how TorchConnector works, the backward pass triggers subsequent Sampler calls.
-        # Let's time a full _train_batch which includes both.
+    # Time forward pass
+    t0_forward = time.perf_counter()
+    _ = qnn_cpu(xb) # Run forward pass, ignore output
+    t1_forward = time.perf_counter()
+    cpu_forward_t = t1_forward - t0_forward
 
-        # For clearer separation of Forward vs. Backward as per column names,
-        # we'll time forward and then time only the .backward() + optimizer.step() portion.
-        # This means the loss calculation needs to be re-done if log_probs are not saved.
-        # Let's re-run forward for backward timing if it simplifies the code, or ensure log_probs are available.
-        
-        # --- Recalculate log_probs if not stored or for clean timing of backward ---
-        # Or even better, time the full _train_batch call for more realistic training step timing
-        # and then also individual forward for comparison.
-        
-        # Simpler approach: Time `_train_batch` to represent a full training step (forward + backward)
-        # and also time the `forward` explicitly.
-        
-        optimizer_cpu = torch.optim.SGD(qnn_cpu.model.parameters(), lr=0.1)
-        
-        t0_full_batch = time.perf_counter()
-        # _train_batch includes forward, loss, backward, optimizer.step()
-        _ = qnn_cpu._train_batch(xb, yb, optimizer_cpu)
-        t1_full_batch = time.perf_counter()
-        cpu_full_batch_t = t1_full_batch - t0_full_batch
+    # Time backward pass (requires a dummy loss and optimizer)
+    # Note: qnn_cpu(xb) has already been called for forward timing.
+    # Calling it again for backward would add redundant forward computation to backward time.
+    # Instead, we just take the last computed log_probs from the previous forward pass
+    # for loss calculation, and then time its backward.
+    # However, to be fully representative of a training step, we'll run a full _train_batch
+    # which includes forward and backward, and extract backward from it if needed,
+    # or just time the _train_batch as a whole.
+    # For simplicity in this benchmark, let's explicitly run a separate forward and backward pass.
+    # To get the backward pass only time, you usually need to separate it from the forward pass.
+    # Given how TorchConnector works, the backward pass triggers subsequent Sampler calls.
+    # Let's time a full _train_batch which includes both.
 
-        # For comparison with GPU's separate forward/backward times, we'll try to estimate.
-        # The backward time is the full batch time minus the forward time. This is an approximation.
-        cpu_backward_t = cpu_full_batch_t - cpu_forward_t
-        if cpu_backward_t < 0: cpu_backward_t = 0 # Ensure non-negative
+    # For clearer separation of Forward vs. Backward as per column names,
+    # we'll time forward and then time only the .backward() + optimizer.step() portion.
+    # This means the loss calculation needs to be re-done if log_probs are not saved.
+    # Let's re-run forward for backward timing if it simplifies the code, or ensure log_probs are available.
+    
+    # --- Recalculate log_probs if not stored or for clean timing of backward ---
+    # Or even better, time the full _train_batch call for more realistic training step timing
+    # and then also individual forward for comparison.
+    
+    # Simpler approach: Time `_train_batch` to represent a full training step (forward + backward)
+    # and also time the `forward` explicitly.
+    
+    optimizer_cpu = torch.optim.SGD(qnn_cpu.model.parameters(), lr=0.1)
+    
+    t0_full_batch = time.perf_counter()
+    # _train_batch includes forward, loss, backward, optimizer.step()
+    _ = qnn_cpu._train_batch(xb, yb, optimizer_cpu)
+    t1_full_batch = time.perf_counter()
+    cpu_full_batch_t = t1_full_batch - t0_full_batch
 
-        print(f"CPU QNN Forward time: {cpu_forward_t:7.3f} s")
-        print(f"CPU QNN Backward time (approx): {cpu_backward_t:7.3f} s")
-        print(f"CPU QNN Full Batch (Fwd+Bwd+Opt) time: {cpu_full_batch_t:7.3f} s")
-        cpu_qnn_status = "Success"
+    # For comparison with GPU's separate forward/backward times, we'll try to estimate.
+    # The backward time is the full batch time minus the forward time. This is an approximation.
+    cpu_backward_t = cpu_full_batch_t - cpu_forward_t
+    if cpu_backward_t < 0: cpu_backward_t = 0 # Ensure non-negative
 
-    except Exception as e:
-        cpu_qnn_status = f"ERROR: {e}"
-        print(f"Error benchmarking CPU QNN for N={n_qubits}: {e}")
+    print(f"CPU QNN Forward time: {cpu_forward_t:7.3f} s")
+    print(f"CPU QNN Backward time (approx): {cpu_backward_t:7.3f} s")
+    print(f"CPU QNN Full Batch (Fwd+Bwd+Opt) time: {cpu_full_batch_t:7.3f} s")
+    cpu_qnn_status = "Success"
+
+    # except Exception as e:
+    #     cpu_qnn_status = f"ERROR: {e}"
+    #     print(f"Error benchmarking CPU QNN for N={n_qubits}: {e}")
 
 
     # --- Benchmark GPU QNN ---
