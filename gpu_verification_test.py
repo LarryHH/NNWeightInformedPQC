@@ -87,7 +87,7 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
     print(f"\n--- Running {label} (N={n_qubits_val}, D={depth_val}) ---")
 
     qc_local = random_circuit(n_qubits_val, depth_val, measure=False, seed=0)
-    circ = transpile(qc_local, sim_instance)
+    circ = transpile(qc_local, sim_instance, optimization_level=0)
 
     gpu_util_history = []
     mem_util_history = []
@@ -120,6 +120,7 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
         monitor_thread.start()
 
     t0 = time.perf_counter()
+    circ.save_statevector()          # forces allocation of 2**n amplitudes
     job = sim_instance.run(circ)
     res = job.result() # Crucial to wait for results
     dt = time.perf_counter() - t0
@@ -141,7 +142,7 @@ def run_and_time_sim(sim_instance, label, n_qubits_val, depth_val):
 try:
     from qiskit_aer import AerSimulator, AerError
 
-    n_qubits, depth = 28, 40 # Qubit count for the test
+    n_qubits, depth = 24, 40 # Qubit count for the test
 
     # --- Initialize CPU Simulator ---
     sim_cpu = AerSimulator(method="statevector", device="CPU")
