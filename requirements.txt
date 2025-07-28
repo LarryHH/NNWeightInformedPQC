@@ -5,6 +5,7 @@ matplotlib
 seaborn
 openml
 pynvml
+tabulate
 # torch
 # qiskit-aer-gpu==0.15.1
 qiskit==1.4.2
