@@ -6,6 +6,7 @@ from qiskit_machine_learning.gradients import (
     SamplerGradientResult,
 )
 from qiskit.circuit import Parameter
+from copy import copy
 
 def _sample_norm(sample_grad):
     """Euclidean norm of one sample (list[dict])."""
@@ -114,3 +115,15 @@ class GuidedSPSASamplerGradient(BaseSamplerGradient):
             metadata=metadata,
             options=self._get_local_options(options),
         )
+    
+
+    def _get_local_options(self, options: dict) -> dict:
+        # Change self.sampler to self._sampler
+        opts = copy(self._sampler.options)
+        
+        # Manually update the options from the provided dictionary
+        for key, value in options.items():
+            if hasattr(opts, key):
+                setattr(opts, key, value)
+                
+        return opts
