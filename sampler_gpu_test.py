@@ -330,6 +330,7 @@ for use_gpu in tqdm(GPU_OPTIONS, desc="Device (GPU/CPU)"):
 
                 # 2. Time the entire fit() call for a few epochs
                 print(f"  Running .fit() for {NUM_FIT_EPOCHS} epochs...")
+                model = torch.compile(model)
                 t0 = time.time()
                 model.fit(
                     train_loader=train_loader_q,
@@ -337,7 +338,7 @@ for use_gpu in tqdm(GPU_OPTIONS, desc="Device (GPU/CPU)"):
                     epochs=NUM_FIT_EPOCHS,
                     optimizer=optimizer,
                     verbose=False,  # Disable inner tqdm for cleaner benchmark logs
-                    eval_every=1    # Evaluate every epoch to include its cost
+                    eval_every=2    # Evaluate every epoch to include its cost
                 )
                 t1 = time.time()
                 total_fit_time = t1 - t0
