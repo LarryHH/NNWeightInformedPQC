@@ -1,5 +1,9 @@
 import torch
 import torch.nn as nn
+
+from torch.cuda.amp import GradScaler
+from torch.cuda.amp import autocast
+
 import numpy as np
 import os
 
@@ -63,6 +67,8 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         self.model = None
         self.criterion = nn.NLLLoss()
         self.seed = seed if seed is not None else algorithm_globals.random_seed
+
+        self.scaler = GradScaler(enabled=(self.device.type == 'cuda'))
 
         # feature_map = ZZFeatureMap(feature_dimension=n_qubits, reps=2)
         feature_map = zzfeaturemap_nontranspiled(n_qubits, reps=2)
@@ -261,16 +267,27 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         """
         return yb.long().view(-1)
 
+    # def _train_batch(self, xb, yb, optimizer):
+    #     """
+    #     Performs a single training step for the QuantumNN.
+    #     """
+    #     optimizer.zero_grad()
+    #     log_probs = self(xb)  # self.forward(xb) which returns log_probabilities
+    #     yb_processed = self._prepare_targets_for_loss(yb)
+    #     loss = self.criterion(log_probs, yb_processed)
+    #     loss.backward()
+    #     optimizer.step()
+    #     return loss
+
     def _train_batch(self, xb, yb, optimizer):
-        """
-        Performs a single training step for the QuantumNN.
-        """
         optimizer.zero_grad()
-        log_probs = self(xb)  # self.forward(xb) which returns log_probabilities
-        yb_processed = self._prepare_targets_for_loss(yb)
-        loss = self.criterion(log_probs, yb_processed)
-        loss.backward()
-        optimizer.step()
+        with autocast(enabled=(self.device.type == 'cuda')):
+            log_probs = self(xb)              
+            yb_processed = self._prepare_targets_for_loss(yb)
+            loss = self.criterion(log_probs, yb_processed)
+        self.scaler.scale(loss).backward()
+        self.scaler.step(optimizer)
+        self.scaler.update()
         return loss
 
     def _evaluate_batch_loss_and_logits(self, xb, yb_original):
