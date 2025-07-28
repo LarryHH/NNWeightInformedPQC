@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+
 from tqdm.auto import tqdm
 from sklearn.metrics import precision_score, recall_score, f1_score
 import matplotlib.pyplot as plt
@@ -22,6 +23,7 @@ class NN(nn.Module):
         self.is_multiclass = num_classes > 2
         self.criterion = None # Must be set by subclasses
         self.history = {
+            "epochs": [],
             "train_loss": [], "val_loss": [],
             "train_acc": [], "val_acc": [],
             "train_prec": [], "val_prec": [],
@@ -199,6 +201,7 @@ class NN(nn.Module):
                             else:
                                 scheduler.step()
 
+                        self.history["epochs"].append(epoch + 1)
                         self.history["train_loss"].append(train_loss_eval)
                         self.history["val_loss"].append(val_loss_eval)
                         self.history["train_acc"].append(train_acc_eval)
@@ -298,12 +301,11 @@ class NN(nn.Module):
         """
         Plots training and validation loss and/or accuracy curves.
         """
-        epochs = range(1, len(self.history["train_loss"]) + 1)
+        epochs = self.history["epochs"] 
         
-        # Create loss plot
         plt.figure(figsize=(8, 5))
-        plt.plot(epochs, self.history["train_loss"], 'b-', label="Train")
-        plt.plot(epochs, self.history["val_loss"], 'r-', label="Validation")
+        plt.plot(epochs, self.history["train_loss"], 'b-o', label="Train") # Added 'o' marker
+        plt.plot(epochs, self.history["val_loss"], 'r-o', label="Validation") # Added 'o' marker
         plt.xlabel("Epoch")
         plt.ylabel("Loss (NLL)")
         plt.title("Loss Curves")
