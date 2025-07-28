@@ -131,106 +131,108 @@ class NN(nn.Module):
     def end_epoch(self):          
         """Called once after every training epoch."""
         pass
-
-    def fit(self, train_loader, val_loader, epochs, optimizer, scheduler=None, verbose=True, use_profiler=False):
-        """
-        Trains the model for a specified number of epochs.
-        If verbose is True, uses tqdm for progress display.
-        If verbose is False, training is silent.
-        Args:
-            use_profiler (bool): If True, enables PyTorch profiler during training.
-        """
- 
-        profiler_schedule = torch.profiler.schedule(wait=1, warmup=1, active=2, repeat=1)
-        profiler_context = None
-
-        if use_profiler:
-            activities = [
-                torch.profiler.ProfilerActivity.CPU,
-            ]
-            if self.device.type == 'cuda':
-                activities.append(torch.profiler.ProfilerActivity.CUDA)
-
-            print("--- PyTorch Profiler Enabled ---")
-            profiler_context = profiler.profile(
-                schedule=profiler_schedule,
-                activities=activities,
-                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/qnn_profile'),
-                with_stack=True,
-                profile_memory=True
-            )
-            profiler_context.__enter__() # Manually enter the context manager
-
-
-        # --- Training Loop ---
-        for epoch in range(epochs):
-            self.train() # Set model to training mode
-            
-            # Setup tqdm loop if verbose, otherwise iterate directly
-            if verbose:
-                loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
-            else:
-                loop = train_loader 
-
-            n_batches = len(train_loader)
-            
-            for i, (xb, yb) in enumerate(loop):
-                xb, yb = self._to_device(xb, yb)
-                loss = self._train_batch(xb, yb, optimizer) # Implemented by subclass
-                
-                postfix_data = {"batch_loss": f"{loss.item():.3f}"}
-
-                # If profiler is active, call prof.step() after each batch
-                if use_profiler and profiler_context is not None:
-                    profiler_context.step()
-                
-                if i == n_batches - 1: # Last batch of the epoch
-                    # Evaluate silently for metrics to update history and postfix
-                    train_loss_eval, train_acc_eval, train_prec_eval, train_rec_eval, train_f1_eval, *_ = self.evaluate(train_loader, verbose=False)
-                    val_loss_eval,   val_acc_eval, val_prec_eval, val_rec_eval, val_f1_eval, *_ = self.evaluate(val_loader, verbose=False)
-
-
-                    if scheduler is not None:
-                        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                            scheduler.step(val_loss_eval)
-                        else:
-                            scheduler.step()
-
-                    self.history["train_loss"].append(train_loss_eval)
-                    self.history["val_loss"].append(val_loss_eval)
-                    self.history["train_acc"].append(train_acc_eval)
-                    self.history["val_acc"].append(val_acc_eval)
-                    self.history["train_prec"].append(train_prec_eval)
-                    self.history["val_prec"].append(val_prec_eval)
-                    self.history["train_rec"].append(train_rec_eval)
-                    self.history["val_rec"].append(val_rec_eval)
-                    self.history["train_f1"].append(train_f1_eval)
-                    self.history["val_f1"].append(val_f1_eval)
-
-                    # Update postfix with epoch summaries if verbose
-                    if verbose:
-                        postfix_data.update({
-                            "train_loss": f"{train_loss_eval:.3f}",
-                            "train_acc":  f"{train_acc_eval:.3f}",
-                            "val_loss":   f"{val_loss_eval:.3f}",
-                            "val_acc":    f"{val_acc_eval:.3f}",
-                        })
-                        if scheduler:
-                            current_lr = optimizer.param_groups[0]['lr']
-                            postfix_data["lr"] = f"{current_lr:.2e}"
-                
-                # Set postfix for tqdm loop if verbose
-                if verbose and isinstance(loop, tqdm):
-                    loop.set_postfix(**postfix_data)
-            self.end_epoch() 
         
-        # --- Profiler Teardown ---
-        if use_profiler and profiler_context is not None:
-            profiler_context.__exit__(None, None, None) # Manually exit the context manager
-            print("--- PyTorch Profiler Results ---")
-            print(profiler_context.key_averages().table(sort_by="cuda_time_total" if self.device.type == 'cuda' else "cpu_time_total", row_limit=20))
-            print("\nRun: tensorboard --logdir=./log to view detailed trace.")
+    def fit(self, train_loader, val_loader, epochs, optimizer, scheduler=None, verbose=True, use_profiler=False, eval_every=1):
+            """
+            Trains the model for a specified number of epochs.
+            If verbose is True, uses tqdm for progress display.
+            If verbose is False, training is silent.
+            Args:
+                use_profiler (bool): If True, enables PyTorch profiler during training.
+                eval_every (int): Controls the frequency of evaluation. E.g., eval_every=5 runs evaluation every 5 epochs.
+            """
+    
+            profiler_schedule = torch.profiler.schedule(wait=1, warmup=1, active=2, repeat=1)
+            profiler_context = None
 
+            if use_profiler:
+                activities = [
+                    torch.profiler.ProfilerActivity.CPU,
+                ]
+                if self.device.type == 'cuda':
+                    activities.append(torch.profiler.ProfilerActivity.CUDA)
+
+                print("--- PyTorch Profiler Enabled ---")
+                profiler_context = profiler.profile(
+                    schedule=profiler_schedule,
+                    activities=activities,
+                    on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/qnn_profile'),
+                    with_stack=True,
+                    profile_memory=True
+                )
+                profiler_context.__enter__() # Manually enter the context manager
+
+
+            # --- Training Loop ---
+            for epoch in range(epochs):
+                self.train() # Set model to training mode
+                
+                # Setup tqdm loop if verbose, otherwise iterate directly
+                if verbose:
+                    loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
+                else:
+                    loop = train_loader 
+
+                n_batches = len(train_loader)
+                
+                for i, (xb, yb) in enumerate(loop):
+                    xb, yb = self._to_device(xb, yb)
+                    loss = self._train_batch(xb, yb, optimizer) # Implemented by subclass
+                    
+                    postfix_data = {"batch_loss": f"{loss.item():.3f}"}
+
+                    # If profiler is active, call prof.step() after each batch
+                    if use_profiler and profiler_context is not None:
+                        profiler_context.step()
+                    
+                    # --- MODIFIED BLOCK ---
+                    # Check if it's the last batch AND if it's an evaluation epoch
+                    if (epoch + 1) % eval_every == 0 and i == n_batches - 1:
+                        # Evaluate silently for metrics to update history and postfix
+                        train_loss_eval, train_acc_eval, train_prec_eval, train_rec_eval, train_f1_eval, *_ = self.evaluate(train_loader, verbose=False)
+                        val_loss_eval,   val_acc_eval, val_prec_eval, val_rec_eval, val_f1_eval, *_ = self.evaluate(val_loader, verbose=False)
+
+
+                        if scheduler is not None:
+                            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                                scheduler.step(val_loss_eval)
+                            else:
+                                scheduler.step()
+
+                        self.history["train_loss"].append(train_loss_eval)
+                        self.history["val_loss"].append(val_loss_eval)
+                        self.history["train_acc"].append(train_acc_eval)
+                        self.history["val_acc"].append(val_acc_eval)
+                        self.history["train_prec"].append(train_prec_eval)
+                        self.history["val_prec"].append(val_prec_eval)
+                        self.history["train_rec"].append(train_rec_eval)
+                        self.history["val_rec"].append(val_rec_eval)
+                        self.history["train_f1"].append(train_f1_eval)
+                        self.history["val_f1"].append(val_f1_eval)
+
+                        # Update postfix with epoch summaries if verbose
+                        if verbose:
+                            postfix_data.update({
+                                "train_loss": f"{train_loss_eval:.3f}",
+                                "train_acc":  f"{train_acc_eval:.3f}",
+                                "val_loss":   f"{val_loss_eval:.3f}",
+                                "val_acc":    f"{val_acc_eval:.3f}",
+                            })
+                            if scheduler:
+                                current_lr = optimizer.param_groups[0]['lr']
+                                postfix_data["lr"] = f"{current_lr:.2e}"
+                    
+                    # Set postfix for tqdm loop if verbose
+                    if verbose and isinstance(loop, tqdm):
+                        loop.set_postfix(**postfix_data)
+                self.end_epoch() 
+            
+            # --- Profiler Teardown ---
+            if use_profiler and profiler_context is not None:
+                profiler_context.__exit__(None, None, None) # Manually exit the context manager
+                print("--- PyTorch Profiler Results ---")
+                print(profiler_context.key_averages().table(sort_by="cuda_time_total" if self.device.type == 'cuda' else "cpu_time_total", row_limit=20))
+                print("\nRun: tensorboard --logdir=./log to view detailed trace.")
 
     @torch.no_grad()
     def evaluate(self, loader, verbose=True):
