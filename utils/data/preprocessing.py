@@ -65,7 +65,7 @@ def apply_pca(X, n_components=2, seed=42):
     X_pca = pca.fit_transform(X)
     return X_pca
 
-def create_data_splits(X, y, batch_size=32, is_classical=True, do_pca=False, n_components=2, seed=42):
+def create_data_splits(X, y, batch_size=32, is_classical=True, do_pca=False, use_gpu=False, n_components=2, seed=42):
 
     is_multiclass = len(np.unique(y)) > 2
 
@@ -89,16 +89,30 @@ def create_data_splits(X, y, batch_size=32, is_classical=True, do_pca=False, n_c
     y_val = torch.tensor(y_val, dtype=torch.long)
     y_test = torch.tensor(y_test, dtype=torch.long)
 
-    train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(x_val, y_val), batch_size=batch_size)
-    test_loader = DataLoader(TensorDataset(x_test, y_test), batch_size=batch_size)
+    # train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
+    # val_loader = DataLoader(TensorDataset(x_val, y_val), batch_size=batch_size)
+    # test_loader = DataLoader(TensorDataset(x_test, y_test), batch_size=batch_size)
 
+    if use_gpu and torch.cuda.is_available():
+        print("Configuring DataLoader for GPU.")
+        dataloader_kwargs = {
+            'num_workers': 4,  # Use multiple subprocesses to load data
+            'pin_memory': True # Speeds up host-to-device transfer
+        }
+    else:
+        print("Configuring DataLoader for CPU.")
+        dataloader_kwargs = {}
+
+    train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True, **dataloader_kwargs)
+    val_loader = DataLoader(TensorDataset(x_val, y_val), batch_size=batch_size, **dataloader_kwargs)
+    test_loader = DataLoader(TensorDataset(x_test, y_test), batch_size=batch_size, **dataloader_kwargs)
+    
     input_dim = x_train.shape[1]
     output_dim = len(np.unique(y))
 
     return x_train, x_val, x_test, y_train, y_val, y_test, train_loader, val_loader, test_loader, input_dim, output_dim, is_multiclass
 
-def data_pipeline(openml_dataset_id, batch_size=32, do_pca=False, n_components=2, seed=42):
+def data_pipeline(openml_dataset_id, batch_size=32, do_pca=False, use_gpu=False, n_components=2, seed=42):
     X, y, le = get_data(openml_dataset_id)
     if X is None:
         raise ValueError("Failed to fetch data. Exiting.")
@@ -119,7 +133,7 @@ def data_pipeline(openml_dataset_id, batch_size=32, do_pca=False, n_components=2
         input_dim,
         output_dim,
         is_multiclass,
-    ) = create_data_splits(X, y, batch_size=batch_size, is_classical=True, do_pca=do_pca, n_components=n_components, seed=seed)
+    ) = create_data_splits(X, y, batch_size=batch_size, is_classical=True, do_pca=do_pca, use_gpu=use_gpu, n_components=n_components, seed=seed)
 
     # --- Quantum ---
     (
@@ -135,7 +149,7 @@ def data_pipeline(openml_dataset_id, batch_size=32, do_pca=False, n_components=2
         _,
         _,
         _,
-    ) = create_data_splits(X, y, batch_size=batch_size, is_classical=False, do_pca=do_pca, n_components=n_components, seed=seed)
+    ) = create_data_splits(X, y, batch_size=batch_size, is_classical=False, do_pca=do_pca, use_gpu=use_gpu, n_components=n_components, seed=seed)
     classical_data = (
         x_train_c,
         x_val_c,
