@@ -57,9 +57,10 @@ from utils.ansatze.WIPQC import WeightInformedPQCAnsatz
 
 # --- Configuration ---
 SEED = 0
+NUM_BENCHMARK_RUNS = 10
 BATCH_SIZE = 32
-GPU_OPTIONS = [False, True]
-QUBIT_COUNTS = [2, 4, 6, 8]
+GPU_OPTIONS = [False, True]  # False for CPU, True for GPU
+QUBIT_COUNTS = [2, 4, 6, 8]  # Number of qubits to test
 GRADIENT_METHODS = ["spsa", "guided_spsa", "param_shift"]
 OUTPUT_CSV_FILE = "results/qnn_benchmark_results.csv"
 
@@ -89,14 +90,40 @@ print(f"\n[INFO] Starting QNN performance benchmark...")
 print(f"Configurations to test: {len(GPU_OPTIONS) * len(QUBIT_COUNTS) * len(GRADIENT_METHODS)}")
 print("-" * 50)
 
+
 # Create a progress bar for the outer loop
 for use_gpu in tqdm(GPU_OPTIONS, desc="Device (GPU/CPU)"):
     if use_gpu and not cuda_available:
         continue
 
     for n_qubits in tqdm(QUBIT_COUNTS, desc=f"Qubits (GPU={use_gpu})", leave=False):
+
+        print("\n[INFO] Loading data...")
+        _, quantum_data, input_dim, output_dim, is_multiclass = (
+            data_pipeline(
+                187,
+                batch_size=32,
+                do_pca=True,
+                use_gpu=use_gpu,
+                n_components=n_qubits,
+                seed=SEED,
+            )
+        )
+        (
+            x_train_q,
+            x_val_q,
+            x_test_q,
+            y_train_q,
+            y_val_q,
+            y_test_q,
+            train_loader_q,
+            val_loader_q,
+            test_loader_q,
+        ) = quantum_data
+
         for gradient_method in GRADIENT_METHODS:
             print(f"\n[TESTING] Qubits: {n_qubits}, Gradient: {gradient_method}, Use GPU: {use_gpu}")
+
 
             try:
                 # 1. Instantiate the Ansatz and the QNN model
@@ -111,6 +138,9 @@ for use_gpu in tqdm(GPU_OPTIONS, desc="Device (GPU/CPU)"):
                     n_qubits=n_qubits,
                     num_classes=num_classes,
                     gradient_method=gradient_method,
+                    use_gpu=use_gpu,
+                    seed=SEED,
+                    default_shots=1024,
                 )
                 
                 # 2. Extract the raw Qiskit SamplerQNN object
@@ -118,31 +148,59 @@ for use_gpu in tqdm(GPU_OPTIONS, desc="Device (GPU/CPU)"):
                 
                 # 3. Create sample data matching the QNN's requirements
                 # The number of inputs for the QNN corresponds to n_qubits
-                sample_features = np.random.rand(BATCH_SIZE, qnn.num_inputs)
+                # sample_features = np.random.rand(BATCH_SIZE, qnn.num_inputs)
+                # sample_weights = np.random.rand(qnn.num_weights)
+
+                # 3. Use a real data batch for the benchmark
+                # Extract one batch of features from the training dataloader
+                real_features_tensor, _ = next(iter(train_loader_q))
+
+                # Convert the PyTorch tensor to a NumPy array for the QNN
+                # If the tensor is on the GPU, it must be moved to the CPU first
+                sample_features = real_features_tensor.cpu().numpy()
+
+                # Initialize model weights randomly (this is correct for a raw pass benchmark)
                 sample_weights = np.random.rand(qnn.num_weights)
 
-                # 4. Time the raw forward pass
-                t0 = time.time()
-                _ = qnn.forward(sample_features, sample_weights)
-                t1 = time.time()
-                forward_time = t1 - t0
-                print(f"  Raw Forward Pass ({BATCH_SIZE} samples): {forward_time:.4f} seconds")
-                
-                # 5. Time the raw backward pass (gradient calculation)
-                t0 = time.time()
-                _, _ = qnn.backward(sample_features, sample_weights)
-                t1 = time.time()
-                backward_time = t1 - t0
-                print(f"  Raw Backward Pass ({BATCH_SIZE} samples): {backward_time:.4f} seconds")
+                print(f"  Using one batch of {sample_features.shape[0]} samples from the actual dataset.")
 
-                # Store results
+                # 4. Time the forward and backward passes over multiple runs
+                forward_times = []
+                backward_times = []
+
+                print(f"  Running benchmark for {NUM_BENCHMARK_RUNS} passes...")
+                for _ in range(NUM_BENCHMARK_RUNS):
+                    # Time the forward pass for one run
+                    t0 = time.time()
+                    _ = qnn.forward(sample_features, sample_weights)
+                    t1 = time.time()
+                    forward_times.append(t1 - t0)
+
+                    # Time the backward pass for one run
+                    t0 = time.time()
+                    _, _ = qnn.backward(sample_features, sample_weights)
+                    t1 = time.time()
+                    backward_times.append(t1 - t0)
+
+                # Calculate the average and standard deviation from all the runs
+                avg_forward_time = np.mean(forward_times)
+                std_forward_time = np.std(forward_times)
+                avg_backward_time = np.mean(backward_times)
+                std_backward_time = np.std(backward_times)
+
+                print(f"  Avg Forward Pass : {avg_forward_time:.4f} ± {std_forward_time:.4f} seconds")
+                print(f"  Avg Backward Pass: {avg_backward_time:.4f} ± {std_backward_time:.4f} seconds")
+
+                # Store the aggregated results
                 results.append({
                     "use_gpu": use_gpu,
                     "n_qubits": n_qubits,
                     "gradient_method": gradient_method,
-                    "forward_time_s": forward_time,
-                    "backward_time_s": backward_time,
-                    "total_time_s": forward_time + backward_time,
+                    "avg_forward_s": avg_forward_time,
+                    "std_forward_s": std_forward_time,
+                    "avg_backward_s": avg_backward_time,
+                    "std_backward_s": std_backward_time,
+                    "total_avg_time_s": avg_forward_time + avg_backward_time,
                     "status": "Success"
                 })
 
