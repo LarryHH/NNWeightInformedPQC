@@ -1,5 +1,5 @@
 try:
-    from .GenericAnsatz import GenericAnsatz
+    from .GenericAnsatz import GenericAnsatz, twolocal_nontranspiled
 except ImportError:
     from GenericAnsatz import GenericAnsatz
 
@@ -19,13 +19,22 @@ class HEA(GenericAnsatz):
         self.entanglement = entanglement
         super().__init__(n_qubits)
     
+    # def create_ansatz(self):
+    #     return TwoLocal(
+    #         self.n_qubits,
+    #         rotation_blocks=self.rotation_blocks,
+    #         entanglement_blocks=self.entanglement_blocks,
+    #         entanglement=self.entanglement,
+    #         reps=self.depth
+    #     )
+
     def create_ansatz(self):
-        return TwoLocal(
+        return twolocal_nontranspiled(
             self.n_qubits,
-            rotation_blocks=self.rotation_blocks,
-            entanglement_blocks=self.entanglement_blocks,
-            entanglement=self.entanglement,
-            reps=self.depth
+            self.depth,
+            self.rotation_blocks,
+            self.entanglement_blocks,
+            self.entanglement
         )
 
     def get_depth(self):
