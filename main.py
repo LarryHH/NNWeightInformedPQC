@@ -47,22 +47,22 @@ from utils.data.preprocessing import data_pipeline
 # %%
 # CONFIGS
 
-USE_GPU = True
-VERBOSE_ON_FIT = True
+USE_GPU = False
+VERBOSE_ON_FIT = False
 
-SEEDS = [1, 2, 3, 4]  # For reproducibility
+SEEDS = [0, 1, 2, 3, 4]  # For reproducibility
 
-DATASET_NAMES = ["iris", "wine", "diabetes"]  # "diabetes" # Add or modify as needed
 OPENML_DATASET_IDS = {
     "iris": (61, 4),
     "wine": (187, 13),
     "diabetes": (37, 8),
 }
+DATASET_NAMES = list(OPENML_DATASET_IDS.keys())
 
 # Common training parameters
 DO_PCA = True
 DEPTH = 2
-N_COMPONENTS = [4, 6]  # Used if DO_PCA is True
+N_COMPONENTS = [8]  # Used if DO_PCA is True
 BATCH_SIZE = 32
 EPOCHS_CLASSICAL = 100  # Reduced for quick testing; use your value e.g., 100
 EPOCHS_QUANTUM = 30  # Reduced for quick testing; use your value e.g., 50
@@ -394,6 +394,7 @@ if __name__ == "__main__":
                         openml_dataset_id,
                         batch_size=BATCH_SIZE,
                         do_pca=DO_PCA,
+                        use_gpu=USE_GPU,
                         n_components=n_components_for_pca,
                         seed=seed,
                     )
@@ -551,7 +552,7 @@ if __name__ == "__main__":
                         qnn_init_dict.update(config["qnn_extra_args"])
 
                     set_seed(seed)  # Reset seed for each ansatz
-                    model_q = QuantumNN(**qnn_init_dict, use_gpu=USE_GPU)
+                    model_q = QuantumNN(**qnn_init_dict, use_gpu=USE_GPU, gradient_method="guided_spsa")
 
                     print(f"[INFO] Extracting schema for {ansatz_name}...")
                     circuit_fp = os.path.join(
@@ -578,6 +579,7 @@ if __name__ == "__main__":
                         factor=0.3,
                         patience=max(1, EPOCHS_QUANTUM // 5),
                         min_lr=1e-4,
+                        verbose=False,
                     )
 
                     print(f"[INFO] Training Quantum Model ({ansatz_name})...")
@@ -589,6 +591,7 @@ if __name__ == "__main__":
                         optimizer=optimizer_q,
                         scheduler=scheduler_q,
                         verbose=VERBOSE_ON_FIT,
+                        eval_every=2
                     )  # Set verbose
                     end_time_q = time.time()
                     avg_time_epoch_q = (
@@ -636,398 +639,3 @@ if __name__ == "__main__":
                 print(f"\n{'='*20} COMPLETED DATASET: {dataset_name.upper()} {'='*20}")
 
             print("\n[INFO] Experiment finished.")
-
-# %%
-raise
-
-# %% [markdown]
-# # Load Results
-# 
-
-# %%
-import ast
-import re
-
-# %%
-def get_after_datetime(df: pd.DataFrame, start_datetime_str: str, end_datetime_str: str | None) -> pd.DataFrame:
-    df['datetime'] = pd.to_datetime(df['datetime'])
-    # get rows between start and end datetime
-    start_datetime = pd.to_datetime(start_datetime_str)
-    if end_datetime_str:    
-        end_datetime = pd.to_datetime(end_datetime_str)
-        return df[(df['datetime'] >= start_datetime) & (df['datetime'] <= end_datetime)]
-    else:
-        return df[df['datetime'] >= start_datetime]
-
-def ignore_ansatze(df: pd.DataFrame, substrings: list[str]) -> pd.DataFrame:
-    patt = "|".join(map(re.escape, substrings))
-    mask = df["ansatz"].str.contains(patt, case=False, regex=True, na=False)
-    return df[~mask]
-
-
-# %%
-datasets   = ["iris", "wine", "diabetes"]
-input_dims = [2, 4, 6, 8]
-
-wi_results_fp = "results/wi_experiment.csv"
-if os.path.exists(wi_results_fp):
-    wi_results_df = pd.read_csv(wi_results_fp)
-
-wi_results_df = get_after_datetime(wi_results_df, "2025-06-03", "2025-06-07")
-wi_results_df = ignore_ansatze(wi_results_df, ["Random PQC", "Real Amplitudes", "MPS", "TTN", "HEA (x, y, z)"])
-
-# nested dict: results[dataset][n_qubits] → filtered DataFrame
-results = {
-    d: {
-        q: grp.query("input_dim == @q")
-        for q in input_dims
-    }
-    for d, grp in (
-        wi_results_df[wi_results_df["model_type"].str.contains("quantum", na=False)]
-        .groupby("dataset_name")
-    ) if d in datasets
-}
-
-iris_results_2q = results["iris"][2]
-iris_results_4q = results["iris"][4]
-
-wine_results_2q = results["wine"][2]
-wine_results_4q = results["wine"][4]
-wine_results_6q = results["wine"][6]
-wine_results_8q = results["wine"][8]
-
-diabetes_results_2q = results["diabetes"][2]
-diabetes_results_4q = results["diabetes"][4]
-diabetes_results_6q = results["diabetes"][6]
-diabetes_results_8q = results["diabetes"][8]
-
-# %%
-iris_results_2q
-
-# %%
-def print_expr(df):
-    print(f"\n{'#'*20} RESULTS FOR {df['dataset_name'].iloc[0].upper()} ({df['input_dim'].iloc[0]} QUBITS) {'#'*20}")
-    print("Train Acc | Validation Acc | Test Acc")
-    _df = df.copy()
-    _df = _df.sort_values(by=["train_acc", "val_acc", "test_acc"], ascending=False)
-    for i, row in _df.iterrows():
-        print(
-            f"{row['ansatz']}: {row['train_acc']:.4f} | {row['val_acc']:.4f} | {row['test_acc']:.4f}"
-        )
-
-# %%
-import ast
-import matplotlib.pyplot as plt
-
-
-def plot_loss_results_horizontal(dataset_df, highlight_keyword="wi-pqc"):
-    """
-    Plots training and validation loss curves side-by-side (horizontally).
-
-    Args:
-        dataset_df (pd.DataFrame): DataFrame containing the results.
-                                   Expected columns: 'train_losses', 'val_losses',
-                                   'model_type', 'dataset_name', 'input_dim'.
-                                   'train_losses' and 'val_losses' should be
-                                   string representations of lists or actual lists.
-        highlight_keyword (str): Keyword in 'model_type' to highlight in the plot.
-    """
-
-    def safe_eval(x):
-        if isinstance(x, list):
-            return x
-        if isinstance(x, str):
-            try:
-                return ast.literal_eval(x)
-            except (ValueError, SyntaxError) as e:
-                print(f"Warning: Could not parse string: {x}. Error: {e}")
-                return []  # Return empty list or handle as appropriate
-        # If x is already a list (e.g. from direct DataFrame creation), return it
-        if isinstance(x, (list, tuple)):
-            return list(x)
-        print(
-            f"Warning: Cannot parse losses of type {type(x)} for value {x}. Returning empty list."
-        )
-        return []
-
-    df = dataset_df.copy()
-    # Ensure 'train_losses' and 'val_losses' are lists of numbers
-    df["train_losses"] = df["train_losses"].apply(safe_eval)
-    df["val_losses"] = df["val_losses"].apply(safe_eval)
-
-    # Filter out rows where losses could not be parsed properly (resulting in empty lists)
-    df = df[df["train_losses"].apply(lambda x: len(x) > 0)]
-    df = df[df["val_losses"].apply(lambda x: len(x) > 0)]
-
-    if df.empty:
-        print("No data to plot after parsing losses.")
-        return
-
-    # Create subplots: 1 row, 2 columns. Share the Y-axis.
-    # Adjusted figsize for a potentially more compact look
-    fig, (ax_train, ax_val) = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-
-    for _, row in df.iterrows():
-        name = str(row.get("ansatz", "Unknown Model"))  # Use .get for safety
-        is_hi = highlight_keyword.lower() in name.lower()
-        lw, alpha = (
-            (2.5, 1.0) if is_hi else (1.0, 0.7)
-        )  # Adjusted alpha for better visibility
-        zorder = 2 if is_hi else 1
-
-        # Ensure there's data to plot for this row
-        if not row["train_losses"] or not row["val_losses"]:
-            print(f"Skipping {name} due to empty loss data after parsing.")
-            continue
-
-        ax_train.plot(
-            row["train_losses"], label=name, linewidth=lw, alpha=alpha, zorder=zorder
-        )
-        ax_val.plot(
-            row["val_losses"],
-            label=name,  # Label will be used for combined legend
-            linewidth=lw,
-            alpha=alpha,
-            linestyle="--",
-            zorder=zorder,
-        )
-
-    ax_train.set_title("Training Loss")
-    ax_train.set_xlabel("Epoch")
-    ax_train.set_ylabel("Loss")
-    ax_train.grid(True, linestyle=":", alpha=0.7)  # Lighter grid
-
-    ax_val.set_title("Validation Loss")
-    ax_val.set_xlabel("Epoch")
-    # ax_val.set_ylabel("Loss") # Not needed due to sharey=True
-    ax_val.grid(True, linestyle=":", alpha=0.7)  # Lighter grid
-
-    # ax_train.set_ylim(0.52, 0.65)
-    # ax_val.set_ylim(0.52, 0.65)  # Set same Y limits for both plots
-
-    # --- Combined Legend ---
-    handles, labels = ax_val.get_legend_handles_labels()
-
-    # Adjust layout to make space for the legend.
-    # The `right` parameter controls the right edge of the subplots.
-    # Reducing the gap between plots and legend.
-    fig.subplots_adjust(
-        left=0.08, right=0.82, top=0.88, bottom=0.15, wspace=0.05
-    )  # Give more room for suptitle and labels
-
-    # Place legend outside the plots, to the right of the validation plot
-    # Adjusted bbox_to_anchor to position it more snugly next to the plots.
-    fig.legend(
-        handles,
-        labels,
-        loc="upper left",  # Anchor point of the legend box
-        bbox_to_anchor=(0.83, 0.88),  # Position the anchor point (relative to figure)
-        borderaxespad=0.1,
-        frameon=True,
-        fontsize="small",
-        title="Model Types",
-    )
-
-    dataset_name_str = (
-        str(df["dataset_name"].iloc[0]).upper()
-        if not df.empty and "dataset_name" in df.columns
-        else "Unknown Dataset"
-    )
-    input_dim_str = (
-        str(df["input_dim"].iloc[0])
-        if not df.empty and "input_dim" in df.columns
-        else "N/A"
-    )
-
-    fig.suptitle(
-        f"Loss Curves for {dataset_name_str} ({input_dim_str} Qubits)",
-        fontsize=16,
-        y=0.97,
-    )  # Adjusted y for suptitle
-
-    plt.show()
-
-# %%
-# plot_loss_results_horizontal(iris_results_2q, highlight_keyword="HEA")
-plot_loss_results_horizontal(iris_results_4q, highlight_keyword="HEA")
-print_expr(iris_results_4q)
-
-# %%
-# plot_loss_results_horizontal(wine_results_2q, highlight_keyword="HEA")
-plot_loss_results_horizontal(wine_results_4q, highlight_keyword="HEA")
-plot_loss_results_horizontal(wine_results_6q, highlight_keyword="HEA")
-plot_loss_results_horizontal(wine_results_8q, highlight_keyword="HEA")
-
-# %%
-# plot_loss_results_horizontal(diabetes_results_2q, highlight_keyword="HEA")
-plot_loss_results_horizontal(diabetes_results_4q, highlight_keyword="HEA")
-plot_loss_results_horizontal(diabetes_results_6q, highlight_keyword="HEA")
-plot_loss_results_horizontal(diabetes_results_8q, highlight_keyword="HEA")
-
-# %%
-# from utils.nn.ClassicalNN import ClassicalNN
-
-# model_c = ClassicalNN(input_dim, hidden_dim=input_dim, output_dim=output_dim)
-# optimizer_c = optim.Adam(model_c.parameters(), lr=0.01)
-
-# start_time = time.time()
-# model_c.fit(train_loader_c, val_loader_c, epochs=epochs_c, optimizer=optimizer_c, verbose=False)
-# end_time = time.time()
-# average_time_per_epoch = (end_time - start_time) / epochs_c
-
-
-# test_metrics = model_c.evaluate(test_loader_c)
-# print(f"Test Results: Loss={test_metrics[0]:.4f}, Acc={test_metrics[1]:.4f}, F1={test_metrics[4]:.4f}")
-
-# model_c.plot_history()
-
-# test_loader_c_x = test_loader_c.dataset.tensors[0].numpy()
-# plot_classification_results(
-#     test_loader_c_x,
-#     test_metrics[6],
-#     test_metrics[5]
-# )
-
-# %%
-# from utils.ansatze.WIPQC import WeightInformedPQCAnsatz
-
-# wi_ansatz = WeightInformedPQCAnsatz(classical_model=model_c, angle_scale_factor=0.1)
-# wi_ansatz.draw()
-
-# %%
-# from utils.nn.QuantumNN import QuantumNN
-# from utils.ansatze.HEA import HEA
-
-# hea_ansatz = HEA(n_qubits=input_dim, depth=2)
-# model_hea = QuantumNN(ansatz=hea_ansatz.get_ansatz(), n_qubits=input_dim, num_classes=output_dim)
-
-# hea_ansatz.draw()
-
-# %%
-# from utils.ansatze.MPS import MPSAnsatz
-# from utils.ansatze.TTN import TTNAnsatz
-
-# mps_ansatz = MPSAnsatz(n_qubits=input_dim)
-# mps_ansatz.draw()
-
-# ttn_ansatz = TTNAnsatz(n_qubits=input_dim)
-# ttn_ansatz.draw()
-
-
-# model_mps = QuantumNN(ansatz=mps_ansatz.get_ansatz(), n_qubits=input_dim, num_classes=output_dim)
-# model_ttn = QuantumNN(ansatz=ttn_ansatz.get_ansatz(), n_qubits=input_dim, num_classes=output_dim)
-
-
-# circuit_fp, params_fp = AnsatzExtractor.extract_and_store_model_schema(ttn_ansatz, model_ttn, ".")
-# qc, metadata = AnsatzExtractor.load_ansatz_from_model_schema(circuit_fp, params_fp)
-
-
-# %%
-qc.decompose().draw(fold=-1)
-
-# %%
-# model_hea = QuantumNN(ansatz=hea_ansatz.get_ansatz(), n_qubits=input_dim, num_classes=output_dim)
-
-# optimizer_q = optim.Adam(model_hea.parameters(), lr=0.05)
-# scheduler_q = torch.optim.lr_scheduler.ReduceLROnPlateau(
-#     optimizer_q,
-#     mode      = "min",
-#     factor    = 0.3,
-#     patience  = epochs_q//5,
-#     min_lr    = 1e-4,
-#     verbose   = True,
-# )
-
-# start_time = time.time()
-# model_hea.fit(train_loader_q, val_loader_q, epochs=epochs_q, optimizer=optimizer_q, scheduler=scheduler_q)
-# end_time = time.time()
-
-# test_metrics_hea = model_hea.evaluate(test_loader_q)
-# print(f"Test Results: Loss={test_metrics_hea[0]:.4f}, Acc={test_metrics_hea[1]:.4f}, F1={test_metrics_hea[4]:.4f}")
-
-# model_hea.plot_history()
-
-# test_loader_q_x = test_loader_q.dataset.tensors[0].numpy()
-# plot_classification_results(
-#     test_loader_q_x,
-#     test_metrics_hea[6],
-#     test_metrics_hea[5]
-# )
-
-# %%
-# model_wi = QuantumNN(
-#     ansatz=wi_ansatz.get_ansatz(),
-#     initial_point=wi_ansatz.get_initial_point(),
-#     n_qubits=input_dim,
-#     num_classes=output_dim
-# )
-
-# optimizer_q = optim.Adam(model_wi.parameters(), lr=0.05)
-# scheduler_q = torch.optim.lr_scheduler.ReduceLROnPlateau(
-#     optimizer_q,
-#     mode      = "min",
-#     factor    = 0.3,
-#     patience  = epochs_q//5,
-#     min_lr    = 1e-4,
-#     verbose   = True,
-# )
-
-# start_time = time.time()
-# model_wi.fit(train_loader_q, val_loader_q, epochs=epochs_q, optimizer=optimizer_q, scheduler=scheduler_q)
-# end_time = time.time()
-
-# test_metrics_wi = model_wi.evaluate(test_loader_q)
-# print(f"Test Results: Loss={test_metrics_wi[0]:.4f}, Acc={test_metrics_wi[1]:.4f}, F1={test_metrics_wi[4]:.4f}")
-
-# model_wi.plot_history()
-
-# test_loader_q_x = test_loader_q.dataset.tensors[0].numpy()
-
-# plot_classification_results(
-#     test_loader_q_x,
-#     test_metrics_wi[6],
-#     test_metrics_wi[5]
-# )
-
-# %%
-# # plot test_metrics_wi and test_metrics_hea
-
-# wi_train_loss = model_wi.history["train_loss"]
-# wi_val_loss = model_wi.history["val_loss"]
-
-# hea_train_loss = model_hea.history["train_loss"]
-# hea_val_loss = model_hea.history["val_loss"]
-
-# fig, ax = plt.subplots(2, 1, figsize=(8, 8))  # 2 rows, 1 column
-
-# epochs = range(1, len(wi_train_loss) + 1)
-
-# # WI loss curves
-# ax[0].plot(epochs, wi_train_loss, 'b-', label="WI Train")
-# ax[0].plot(epochs, hea_train_loss, 'r-', label="HEA Train")
-# ax[0].set_xlabel("Epoch")
-# ax[0].set_ylabel("Loss (NLL)")
-# ax[0].set_title("Training Loss Curves")
-# ax[0].legend()
-# ax[0].grid(alpha=0.3)
-
-# # HEA loss curves
-# ax[1].plot(epochs, wi_val_loss, 'g-', label="WI Validation")
-# ax[1].plot(epochs, hea_val_loss, 'y-', label="HEA Validation")
-# ax[1].set_xlabel("Epoch")
-# ax[1].set_ylabel("Loss (NLL)")
-# ax[1].set_title("Validation Loss Curves")
-# ax[1].legend()
-# ax[1].grid(alpha=0.3)
-
-# plt.tight_layout()
-# plt.show()
-
-
-# %%
-
-
-# %%
-
-
-
