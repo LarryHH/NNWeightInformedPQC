@@ -266,6 +266,12 @@ class SpecifiedPQCAnsatz(GenericAnsatz):
         Get the circuit specification matrix.
         """
         return self.circuit_spec
+    
+    def get_depth(self):
+        """
+        Get the depth (number of time steps) of the circuit.
+        """
+        return self.depth
 
 
 if __name__ == "__main__":
