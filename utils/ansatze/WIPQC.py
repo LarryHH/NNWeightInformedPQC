@@ -156,8 +156,11 @@ class PQCGenerator:
                     if m2 > 0:
                         c_z = np.sum(f_vec[m1:])
 
-                c_y += b_vector[0] if len(b_vector) >= 1 else 0.0
-                c_z += b_vector[1] if len(b_vector) >= 2 else 0.0
+                # c_y += b_vector[0] if len(b_vector) >= 1 else 0.0
+                # c_z += b_vector[1] if len(b_vector) >= 2 else 0.0
+                bias_contrib = float(np.sum(b_vector)) if b_vector.size>0 else 0.0
+                c_y += bias_contrib
+                c_z += bias_contrib
                 coeffs_array[j_q, 0] = c_y  # Ry
                 coeffs_array[j_q, 1] = c_z  # Rz
         return coeffs_array
@@ -186,14 +189,21 @@ class PQCGenerator:
                     u_j = U[:, j_q]  # j-th left singular vector (D_out dim)
                     v_j = V[:, j_q]  # j-th right singular vector (D_in dim)
 
-                    # Ry angle from scaled left singular vector u_j
-                    c_y = np.sum(s_j * u_j)
-                    # Rz angle from scaled right singular vector v_j
-                    c_z = np.sum(s_j * v_j)
+                    # # Ry angle from scaled left singular vector u_j
+                    # c_y = np.sum(s_j * u_j)
+                    # # Rz angle from scaled right singular vector v_j
+                    # c_z = np.sum(s_j * v_j)
+                    idx_u = j_q % u_j.size
+                    idx_v = j_q % v_j.size
+                    c_y = float(s_j * u_j[idx_u])
+                    c_z = float(s_j * v_j[idx_v])
 
                 # Add biases - using first two available bias terms
-                c_y += b_vector[0] if len(b_vector) >= 1 else 0.0
-                c_z += b_vector[1] if len(b_vector) >= 2 else 0.0
+                # c_y += b_vector[0] if len(b_vector) >= 1 else 0.0
+                # c_z += b_vector[1] if len(b_vector) >= 2 else 0.0
+                bias_contrib = float(np.sum(b_vector)) if b_vector.size>0 else 0.0
+                c_y += bias_contrib
+                c_z += bias_contrib
                 coeffs_array[j_q, 0] = c_y  # Ry
                 coeffs_array[j_q, 1] = c_z  # Rz
         except np.linalg.LinAlgError:
@@ -248,31 +258,6 @@ class PQCGenerator:
             direction=self.ent_direction,
         )
 
-    # def _get_entangler_pairs(
-    #     self, W_src: np.ndarray
-    # ) -> Tuple[List[Tuple[int, int]], np.ndarray]:
-    #     M_f = W_src.T @ W_src
-    #     D_int = M_f.shape[0]
-    #     M_ent = M_f
-    #     if D_int != self.n_qubits:
-    #         if D_int > self.n_qubits:
-    #             M_ent = M_f[: self.n_qubits, : self.n_qubits]
-    #         else:
-    #             M_ent = np.zeros((self.n_qubits, self.n_qubits), dtype=np.float32)
-    #             M_ent[:D_int, :D_int] = M_f
-    #     pairs = []
-    #     if self.n_qubits > 1 and M_ent.shape == (self.n_qubits, self.n_qubits):
-    #         es = [
-    #             {"s": abs(M_ent[i, k]), "p": (i, k)}
-    #             for i in range(self.n_qubits)
-    #             for k in range(i + 1, self.n_qubits)
-    #         ]
-    #         s_es = sorted(es, key=lambda x: x["s"], reverse=True)
-    #         n_add = min(self.n_qubits, len(s_es))
-    #         pairs = [e["p"] for e in s_es[:n_add]]
-    #     elif M_ent.shape != (self.n_qubits, self.n_qubits):
-    #         print(f"Err: M_ent shape {M_ent.shape}")
-    #     return pairs, M_ent
 
     def add_rotation_layer(
         self, W_mat: np.ndarray, b_vec: np.ndarray, label_suffix: str = ""
