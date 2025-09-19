@@ -155,3 +155,204 @@ def load_openml_data(openml_id, n_features=8, seed=42):
     y_test = y_test_q.numpy().astype(int)
 
     return X_train, y_train, X_val, y_val, X_test, y_test
+
+
+
+def make_simple_multiclass_data(n_samples=1000, n_features=4, n_classes=4, random_state=42, cluster_std=0.5, separation_scale=3.0):
+    """
+    Generates a simple synthetic multiclass classification dataset with well-separated clusters.
+
+    This function creates n_classes clusters by distributing their centers along the axes 
+    of the feature space, ensuring they are distinct and separated.
+
+    Args:
+        n_samples (int): Total number of samples to generate.
+        n_features (int): The number of features for each sample.
+        n_classes (int): The number of distinct classes (clusters) to generate.
+        random_state (int): Seed for the random number generator for reproducibility.
+        cluster_std (float): The standard deviation of the Gaussian clusters. Smaller values 
+                             lead to tighter, more easily separable clusters.
+        separation_scale (float): A factor controlling the distance of cluster centers from the origin.
+                                  Larger values result in greater separation between classes.
+    """
+    
+    # This method of creating centers works for up to 2 * n_features classes.
+    if n_classes > 2 * n_features:
+        raise ValueError(
+            f"Cannot create {n_classes} unique centers for {n_features} features "
+            f"with this method. Maximum supported classes is {2 * n_features}."
+        )
+
+    # Use a modern random number generator for better practice
+    rng = np.random.default_rng(random_state)
+    
+    all_X_parts = []
+    all_y_parts = []
+
+    # Distribute samples evenly among classes, handling remainders
+    samples_per_class = [n_samples // n_classes] * n_classes
+    for i in range(n_samples % n_classes):
+        samples_per_class[i] += 1
+
+    for i in range(n_classes):
+        # --- Create a unique center for each class ---
+        center = np.zeros(n_features)
+        # Cycle through feature dimensions to place the center
+        feature_idx = i % n_features
+        # Use positive and negative directions along the axis
+        sign = (-1)**(i // n_features)
+        center[feature_idx] = sign * separation_scale
+        
+        # Generate Gaussian data points around the center
+        n_class_samples = samples_per_class[i]
+        X_class = (rng.standard_normal((n_class_samples, n_features)) * cluster_std) + center
+        y_class = np.full(n_class_samples, i) # Label is the class index
+
+        all_X_parts.append(X_class)
+        all_y_parts.append(y_class)
+
+    # Combine the data from all classes into single arrays
+    X = np.vstack(all_X_parts)
+    y = np.hstack(all_y_parts)
+    
+    # Shuffle the entire dataset to mix the classes
+    shuffle_idx = rng.permutation(n_samples)
+    X, y = X[shuffle_idx], y[shuffle_idx]
+
+    # Scale features to a range suitable for angle encoding in quantum circuits
+    scaler = MinMaxScaler(feature_range=(0, np.pi))
+    X_scaled = scaler.fit_transform(X)
+
+    # --- Split data into training, validation, and test sets ---
+    test_size = 0.15
+    val_size = 0.15
+
+    # First split to separate training data from a temporary set (validation + test)
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X_scaled, y,
+        test_size=(val_size + test_size),
+        random_state=random_state,
+        stratify=y  # Stratify to ensure class proportions are maintained
+    )
+    
+    # Second split to separate the temporary set into validation and test sets
+    relative_test_size = test_size / (val_size + test_size)
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp,
+        test_size=relative_test_size,
+        random_state=random_state,
+        stratify=y_temp
+    )
+    
+    return X_train, y_train, X_val, y_val, X_test, y_test
+
+
+
+from qiskit.circuit import QuantumCircuit, Parameter
+
+
+def qiskit_to_matrix(circuit: QuantumCircuit) -> list[list[str]]:
+    """
+    Converts a Qiskit QuantumCircuit into a matrix-like list of strings,
+    preserving the parallel "layered" structure seen in the circuit diagram.
+
+    This function understands that gates on different qubits can occur in the
+    same time step (layer) and structures the matrix accordingly. This is
+    essential for accurately representing and reconstructing circuits.
+
+    Args:
+        circuit: The input Qiskit QuantumCircuit object.
+
+    Returns:
+        A list of lists of strings representing the layered circuit structure.
+    """
+    num_qubits = circuit.num_qubits
+    if num_qubits == 0:
+        return []
+
+    qubit_map = {qubit: i for i, qubit in enumerate(circuit.qubits)}
+    
+    # Initialize matrix with one empty list per qubit
+    matrix = [[] for _ in range(num_qubits)]
+    
+    # Tracks the number of columns filled for each qubit's timeline
+    # This tells us when each qubit is next available.
+    qubit_available_at_col = [0] * num_qubits
+    
+    multi_qubit_gate_counter = 1
+    gate_name_map = {'r': 'rx', 'u1': 'rz', 'x': 'x', 'rz': 'rz', 'rx': 'rx'}
+
+    for instruction in circuit.data:
+        op = instruction.operation
+        q_args = instruction.qubits
+
+        if not q_args or op.name in ['barrier', 'measure']:
+            continue
+
+        op_qubit_indices = [qubit_map[q] for q in q_args]
+
+        # Determine the column where this new gate should start.
+        # It's the first column where all its qubits are available.
+        start_col = 0
+        for idx in op_qubit_indices:
+            start_col = max(start_col, qubit_available_at_col[idx])
+
+        # --- Pad all rows with empty strings up to the start column ---
+        for i in range(num_qubits):
+            padding_needed = start_col - len(matrix[i])
+            if padding_needed > 0:
+                matrix[i].extend([''] * padding_needed)
+        
+        # --- Place the gate strings in the correct rows at start_col ---
+        if op.num_qubits > 1:
+            if op.name == 'cx':
+                control_idx, target_idx = op_qubit_indices
+                matrix[control_idx].append(f'cx_{multi_qubit_gate_counter}c')
+                matrix[target_idx].append(f'cx_{multi_qubit_gate_counter}t')
+                multi_qubit_gate_counter += 1
+            else:
+                # Handle other multi-qubit gates if necessary
+                print(f"Warning: Unsupported multi-qubit gate '{op.name}' found.")
+                for idx in op_qubit_indices:
+                    matrix[idx].append(f'{op.name}_{idx}') # Generic placeholder
+
+        elif op.num_qubits == 1:
+            qubit_index = op_qubit_indices[0]
+            gate_name = gate_name_map.get(op.name, op.name)
+            matrix[qubit_index].append(gate_name)
+
+        # --- Update qubit availability and fill gaps for non-participating qubits ---
+        for idx in op_qubit_indices:
+            qubit_available_at_col[idx] = start_col + 1
+        
+        # Ensure all rows are of the same length after adding the gate
+        max_len = max(len(row) for row in matrix)
+        for i, row in enumerate(matrix):
+            if len(row) < max_len:
+                row.append('')
+                qubit_available_at_col[i] = max_len
+
+
+    # Final padding to make the matrix rectangular
+    max_len = max(len(row) for row in matrix)
+    for row in matrix:
+        padding_needed = max_len - len(row)
+        if padding_needed > 0:
+            row.extend([''] * padding_needed)
+            
+    return matrix
+
+import json
+
+def write_matrix_to_json(matrix: list[list[str]], filename: str):
+    """Writes the circuit matrix to a JSON file."""
+    with open(filename, 'w') as f:
+        json.dump(matrix, f, indent=2) # indent for readability
+    print(f"Matrix successfully written to {filename}")
+
+def read_matrix_from_json(filename: str) -> list[list[str]]:
+    """Reads a circuit matrix from a JSON file."""
+    with open(filename, 'r') as f:
+        matrix = json.load(f)
+    print(f"Matrix successfully read from {filename}")
+    return matrix

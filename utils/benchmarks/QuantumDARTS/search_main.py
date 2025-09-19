@@ -8,7 +8,7 @@ import json
 
 from .quantum_darts_model import QuantumDARTSModel
 from .trainer import DARTSTrainer
-from .utils import GATE_POOL, load_mnist_data, load_multiclass_data, load_openml_data
+from .utils import GATE_POOL, load_mnist_data, load_multiclass_data, load_openml_data, make_simple_multiclass_data, write_matrix_to_json, qiskit_to_matrix
 
 
 def plot_history(search_history, derived_history):
@@ -42,7 +42,6 @@ def plot_history(search_history, derived_history):
     print(f"\nSaved learning curves to {results_dir}/learning_curves.png")
 
 
-
 def main(dataset_id, n_qubits, n_layers, results_dir='./results'):
     """
     Main function to configure and run the QuantumDARTS search.
@@ -52,21 +51,26 @@ def main(dataset_id, n_qubits, n_layers, results_dir='./results'):
     print(f"Training for {EPOCHS} epochs.")
     print("-" * 55)
 
-    # # --- Problem Definition (Machine Learning) ---
-    # if DATASET == 'MNIST':
-    #     print("Loading MNIST dataset for digits 0 and 1")
-    #     X_train, y_train, X_val, y_val, X_test, y_test = load_mnist_data(n_features=N_FEATURES)
-    #     n_classes = 2
-    # elif DATASET == 'Multiclass':
-    #     print(f"Generating synthetic multiclass dataset with {N_CLASSES} classes...")
-    #     X_train, y_train, X_val, y_val, X_test, y_test = load_multiclass_data(n_features=N_FEATURES, n_classes=N_CLASSES)
-    #     n_classes = N_CLASSES
-    # else:
-    #     raise ValueError("Unsupported DATASET. Choose 'MNIST' or 'Multiclass'.")
-
-    X_train, y_train, X_val, y_val, X_test, y_test = load_openml_data(dataset_id, n_features=n_qubits, seed=42)
-    n_classes = len(np.unique(y_train))
-    print(f"Loaded dataset ID {dataset_id} with {n_classes} classes.")
+    if dataset_id == 0:
+        n_classes = 3
+        print(f"Generating synthetic multiclass dataset with {n_classes} classes...")
+        X_train, y_train, X_val, y_val, X_test, y_test = make_simple_multiclass_data(
+            n_features=n_qubits,
+            n_classes=n_classes, 
+            n_samples=500, 
+            cluster_std=0.01, 
+            random_state=42
+        )
+    elif dataset_id == 1:
+        print("Loading MNIST dataset for digits 0 and 1")
+        X_train, y_train, X_val, y_val, X_test, y_test = load_mnist_data(n_features=n_qubits)
+        n_classes = 2
+    elif dataset_id in [61, 187, 37]: # iris, wine, diabetes
+        X_train, y_train, X_val, y_val, X_test, y_test = load_openml_data(dataset_id, n_features=n_qubits, seed=42)
+        n_classes = len(np.unique(y_train))
+        print(f"Loaded dataset ID {dataset_id} with {n_classes} classes.")
+    else:
+        raise ValueError(f"Unsupported dataset_id {dataset_id}. Supported: 0 (clusters), 1 (MNIST), 61 (iris), 187 (wine), 37 (diabetes).")
 
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.long))
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
@@ -130,6 +134,11 @@ def main(dataset_id, n_qubits, n_layers, results_dir='./results'):
         print(f"\nSaved circuit diagram to {circuit_diagram_path}")
     except Exception as e:
         print(f"\nCould not draw circuit: {e}")
+
+    # Save the circuit specification as a JSON matrix
+    circuit_matrix = qiskit_to_matrix(final_circuit)
+    circuit_json_path = f"{results_dir}/circuit.json"
+    write_matrix_to_json(circuit_matrix, circuit_json_path)
     
     # --- Detailed Circuit and Performance Evaluation ---
     # Applicable Metrics:
@@ -190,23 +199,25 @@ if __name__ == "__main__":
 
     N_LAYERS = 8  # A slightly deeper circuit for a more complex task
     # Training hyperparameters
-    EPOCHS = 20 # Adjust as needed for the larger dataset
+    EPOCHS = 10 # Adjust as needed for the larger dataset
     BATCH_SIZE = 32
-    LEARNING_RATE_ARCH = 0.02
-    LEARNING_RATE_ROT = 0.02
+    LEARNING_RATE_ARCH = 0.01
+    LEARNING_RATE_ROT = 0.01
 
     PERFORM_INTERMEDIATE_EVAL = True
     EVAL_EVERY = 2
 
-    RETRAINING_STEPS = 50
+    RETRAINING_STEPS = 30
     RETRAINING_LR = 0.01
 
     DATASETS = {
+        # "clusters": (0, 2),  # Synthetic dataset with 2 features
+        # "mnist": (1, 8),  # Reduced MNIST for binary classification (0 vs 1)
         "iris": (61, 4),
         "wine": (187, 13),
         "diabetes": (37, 8),
     }
-    N_QUBITS = [2,4,6] # [2,4,6,8]
+    N_QUBITS = [2,4,6,8] # [2,4,6,8]
     N_LAYERS = [int(24/q) for q in N_QUBITS]  # Keep depth inversely proportional to qubits
     for n_qubits, n_layers in zip(N_QUBITS, N_LAYERS):
         for dataset, (_, n_features) in DATASETS.items():
