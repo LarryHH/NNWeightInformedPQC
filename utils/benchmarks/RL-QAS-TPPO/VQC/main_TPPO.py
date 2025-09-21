@@ -18,7 +18,7 @@ import pathlib
 import copy
 from vqc_helpers import get_config, dictionary_of_actions, dict_of_actions_revert_q
 from environment_VQC import CircuitEnv, make_simple_multiclass_data
-from VQC import _class_probs_from_statevec
+from VQC import _class_probs_from_statevec, _build_zprod_observables, _learn_perm_from_logits, _apply_perm
 import agents
 import time
 torch.set_num_threads(1)
@@ -30,12 +30,125 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 from argparse import Namespace
 
-# script_dir = os.path.dirname(os.path.abspath(__file__))
-# project_root = os.path.abspath(os.path.join(script_dir, "..", "..", ".."))
-# if project_root not in sys.path:
-#     sys.path.append(project_root)
 from utils.data.preprocessing import data_pipeline
 from utils.nn.optuna import DATASETS, N_QUBITS
+
+
+from sklearn.metrics import confusion_matrix
+import numpy as np
+import math
+from qulacs import QuantumState, QuantumCircuit
+from qulacs.gate import RY
+
+from qiskit.circuit import QuantumCircuit as QkCircuit, Parameter
+
+
+def qiskit_to_matrix(circuit: QkCircuit) -> list[list[str]]:
+    """
+    Converts a Qiskit QuantumCircuit into a matrix-like list of strings,
+    preserving the parallel "layered" structure seen in the circuit diagram.
+
+    This function understands that gates on different qubits can occur in the
+    same time step (layer) and structures the matrix accordingly. This is
+    essential for accurately representing and reconstructing circuits.
+
+    Args:
+        circuit: The input Qiskit QuantumCircuit object.
+
+    Returns:
+        A list of lists of strings representing the layered circuit structure.
+    """
+    num_qubits = circuit.num_qubits
+    if num_qubits == 0:
+        return []
+
+    qubit_map = {qubit: i for i, qubit in enumerate(circuit.qubits)}
+    
+    # Initialize matrix with one empty list per qubit
+    matrix = [[] for _ in range(num_qubits)]
+    
+    # Tracks the number of columns filled for each qubit's timeline
+    # This tells us when each qubit is next available.
+    qubit_available_at_col = [0] * num_qubits
+    
+    multi_qubit_gate_counter = 1
+    gate_name_map = {'r': 'rx', 'u1': 'rz', 'x': 'x', 'rz': 'rz', 'rx': 'rx'}
+
+    for instruction in circuit.data:
+        op = instruction.operation
+        q_args = instruction.qubits
+
+        if not q_args or op.name in ['barrier', 'measure']:
+            continue
+
+        op_qubit_indices = [qubit_map[q] for q in q_args]
+
+        # Determine the column where this new gate should start.
+        # It's the first column where all its qubits are available.
+        start_col = 0
+        for idx in op_qubit_indices:
+            start_col = max(start_col, qubit_available_at_col[idx])
+
+        # --- Pad all rows with empty strings up to the start column ---
+        for i in range(num_qubits):
+            padding_needed = start_col - len(matrix[i])
+            if padding_needed > 0:
+                matrix[i].extend([''] * padding_needed)
+        
+        # --- Place the gate strings in the correct rows at start_col ---
+        if op.num_qubits > 1:
+            if op.name == 'cx':
+                control_idx, target_idx = op_qubit_indices
+                matrix[control_idx].append(f'cx_{multi_qubit_gate_counter}c')
+                matrix[target_idx].append(f'cx_{multi_qubit_gate_counter}t')
+                multi_qubit_gate_counter += 1
+            else:
+                # Handle other multi-qubit gates if necessary
+                print(f"Warning: Unsupported multi-qubit gate '{op.name}' found.")
+                for idx in op_qubit_indices:
+                    matrix[idx].append(f'{op.name}_{idx}') # Generic placeholder
+
+        elif op.num_qubits == 1:
+            qubit_index = op_qubit_indices[0]
+            gate_name = gate_name_map.get(op.name, op.name)
+            matrix[qubit_index].append(gate_name)
+
+        # --- Update qubit availability and fill gaps for non-participating qubits ---
+        for idx in op_qubit_indices:
+            qubit_available_at_col[idx] = start_col + 1
+        
+        # Ensure all rows are of the same length after adding the gate
+        max_len = max(len(row) for row in matrix)
+        for i, row in enumerate(matrix):
+            if len(row) < max_len:
+                row.append('')
+                qubit_available_at_col[i] = max_len
+
+
+    # Final padding to make the matrix rectangular
+    max_len = max(len(row) for row in matrix)
+    for row in matrix:
+        padding_needed = max_len - len(row)
+        if padding_needed > 0:
+            row.extend([''] * padding_needed)
+            
+    return matrix
+
+import json
+
+def write_matrix_to_json(matrix: list[list[str]], filename: str):
+    """Writes the circuit matrix to a JSON file."""
+    with open(filename, 'w') as f:
+        json.dump(matrix, f, indent=2) # indent for readability
+    print(f"Matrix successfully written to {filename}")
+
+def read_matrix_from_json(filename: str) -> list[list[str]]:
+    """Reads a circuit matrix from a JSON file."""
+    with open(filename, 'r') as f:
+        matrix = json.load(f)
+    print(f"Matrix successfully read from {filename}")
+    return matrix
+
 
 
 # ==============================================================================#
@@ -153,46 +266,52 @@ def regenerate_open_ml_test_data(conf, seed, n_components=2):
     print(f"[data] Test set prepared. Shape: {X_test.shape}")
     return X_test, y_test, n_components
 
-def eval_accuracy_on_circuit(circuit, X_te, y_te, num_qubits, n_classes):
-    """
-    Evaluates a circuit's accuracy on a test set using the 
-    computational basis measurement method for multiclass classification.
-    """
-    from qulacs import QuantumState, QuantumCircuit
-    from qulacs.gate import RY
-    
-    all_prediction_scores = []
-    for x in X_te:
-        # Prepare the circuit with encoded features
-        feat_circuit = QuantumCircuit(num_qubits)
-        for i in range(num_qubits):
-            feat_circuit.add_gate(RY(i, x[i % len(x)]))
-        
-        full_circuit = QuantumCircuit(num_qubits)
-        full_circuit.merge_circuit(feat_circuit)
-        full_circuit.merge_circuit(circuit)
-        
-        # Get quantum state and calculate probabilities
-        state = QuantumState(num_qubits)
-        full_circuit.update_quantum_state(state)
-        state_vector = state.get_vector()
-        # all_probabilities = np.abs(state_vector)**2
-        
-        # The scores are the probabilities of the first n_classes basis states
-        # class_scores = all_probabilities[:n_classes]
-        class_scores = _class_probs_from_statevec(state_vector, num_qubits, n_classes)
 
-        all_prediction_scores.append(class_scores)
+def eval_accuracy_on_circuit(
+    circuit, X_te, y_te, num_qubits, n_classes,
+    X_cal=None, y_cal=None  # ← pass train split here
+):
+    # decide head
+    k = int(math.ceil(math.log2(n_classes))) if n_classes > 1 else 0
+    head_type = "probs" if (n_classes > 1 and n_classes == (1 << k) and k <= num_qubits) else "logits"
 
-    # Predict class using argmax on the scores
-    preds = np.argmax(np.array(all_prediction_scores), axis=1)
-    
-    # Calculate accuracy
-    acc = np.mean(preds == y_te)
-    
-    # Calculate multiclass confusion matrix using scikit-learn
-    cm = confusion_matrix(y_te, preds)
-    
+    # cache observables if logits
+    obs_cache = _build_zprod_observables(num_qubits, n_classes) if head_type == "logits" else None
+
+    def _score_batch(X):
+        out = []
+        for x in X:
+            feat = QuantumCircuit(num_qubits)
+            for i in range(num_qubits):
+                feat.add_gate(RY(i, x[i % len(x)]))
+            full = QuantumCircuit(num_qubits)
+            full.merge_circuit(feat)
+            full.merge_circuit(circuit)
+            st = QuantumState(num_qubits)
+            full.update_quantum_state(st)
+
+            if head_type == "probs":
+                vec = st.get_vector()
+                s = _class_probs_from_statevec(vec, num_qubits, n_classes)
+            else:
+                s = np.array([o.get_expectation_value(st) for o in obs_cache], dtype=float)
+            out.append(s)
+        return np.vstack(out)  # (N, C)
+
+    # build eval matrix
+    M_eval = _score_batch(X_te)
+
+    # learn permutation on calibration split (prefer train; else test)
+    if head_type == "logits":
+        if X_cal is None or y_cal is None:
+            X_cal, y_cal = X_te, y_te
+        M_cal = _score_batch(X_cal)
+        P = _learn_perm_from_logits(M_cal, y_cal, n_classes)
+        M_eval = _apply_perm(M_eval, P)
+
+    preds = np.argmax(M_eval, axis=1)
+    acc = float(np.mean(preds == y_te))
+    cm = confusion_matrix(y_te, preds, labels=np.arange(n_classes))
     return acc, cm, preds.tolist()
 
 def print_circuit_details(circuit):
@@ -221,10 +340,8 @@ def convert_qulacs_to_qiskit(qulacs_circuit):
     """
     Converts a Qulacs ParametricQuantumCircuit to a Qiskit QuantumCircuit for visualization.
     """
-    from qiskit import QuantumCircuit
-    from qiskit.circuit import Parameter
     num_qubits = qulacs_circuit.get_qubit_count()
-    qiskit_qc = QuantumCircuit(num_qubits)
+    qiskit_qc = QkCircuit(num_qubits)
     param_index = 0
 
     gate_count = qulacs_circuit.get_gate_count()
@@ -418,10 +535,10 @@ if __name__ == '__main__':
 
     N_QUBITS = [2,4,6,8] 
     DATASETS = {
-        # "iris": (61, 4),
-        # "wine": (187, 13),
-        # "diabetes": (37, 8),
-        "clusters": (None, 2),  # Synthetic dataset with 2 features
+        "iris": (61, 4),
+        "wine": (187, 13),
+        "diabetes": (37, 8),
+        # "clusters": (None, 2),  # Synthetic dataset with 2 features
     }
     for n_qubits in N_QUBITS:
         for dataset, (_, n_features) in DATASETS.items():
@@ -502,8 +619,11 @@ if __name__ == '__main__':
                 print("Retrieved circuit via get_parametric_circuit()")
                 print_circuit_details(circuit)
                 circuit_fp = f"{results_path}{args.experiment_name}{args.config}/thresh_{conf['env']['accept_err']}_{args.seed}"
-                convert_qulacs_to_qiskit(circuit).draw(output='mpl', filename=f"{circuit_fp}_circuit.png")
-                save_circuit_to_file(circuit, f"{circuit_fp}_circuit.pkl")
+                qiskit_circuit = convert_qulacs_to_qiskit(circuit)
+                qiskit_circuit.draw(output='mpl', filename=f"{circuit_fp}_circuit.png")
+                # save_circuit_to_file(circuit, f"{circuit_fp}_circuit.pkl")
+                circuit_matrix = qiskit_to_matrix(qiskit_circuit)
+                write_matrix_to_json(circuit_matrix, f"{circuit_fp}_circuit.json")
             except Exception as e:
                 print(f"[eval] get_parametric_circuit() failed: {e}")
             # ==============================================================================#

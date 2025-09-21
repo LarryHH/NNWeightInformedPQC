@@ -6,7 +6,98 @@ from scipy.optimize import OptimizeResult
 from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split
 
+import math
+import itertools
+import numpy as np
+from qulacs import Observable
+import math
 
+from sklearn.metrics import confusion_matrix
+from scipy.optimize import linear_sum_assignment
+
+def _learn_perm_from_logits(M_NC, y_N, C):
+    preds = np.argmax(M_NC, axis=1)
+    cm = confusion_matrix(y_N, preds, labels=np.arange(C))
+    r, c = linear_sum_assignment(-cm)
+    P = np.zeros((C, C), dtype=float)
+    for i, j in zip(r, c): P[i, j] = 1.0
+    return P
+
+def _apply_perm(M_NC, P_CxC):
+    return M_NC @ P_CxC.T
+
+def _class_probs_from_statevec(state_vec, n_qubits, n_classes):
+    k = int(math.ceil(math.log2(n_classes)))
+    if k > n_qubits:
+        raise ValueError(f"need at least k={k} class qubits; have {n_qubits}")
+    probs = np.abs(state_vec)**2
+    mask = (1 << k) - 1
+    agg = np.zeros(1 << k, dtype=float)
+    # sum over low-k-bit buckets
+    for idx, p in enumerate(probs):
+        agg[idx & mask] += p
+    cls = agg[:n_classes]
+    s = cls.sum()
+    if s <= 0:
+        return np.ones(n_classes, dtype=float) / n_classes
+    return cls / s
+
+def _ce_from_logits(logits_NC, y_N):
+    # logits_NC: (N,C) real; y_N: ints in [0,C-1]
+    z = logits_NC - np.max(logits_NC, axis=1, keepdims=True)
+    expz = np.exp(z)
+    p = expz / np.sum(expz, axis=1, keepdims=True)
+    return -np.mean(np.log(p[np.arange(len(y_N)), y_N] + 1e-12))
+
+def _ce_loss_from_probs(probs_NC, y_N):
+    """
+    probs_NC: array (N, C) rows sum to 1
+    y_N: int labels in [0, C-1]
+    """
+    return -np.mean(np.log(probs_NC[np.arange(len(y_N)), y_N] + 1e-12))
+
+def _build_zprod_observables(num_qubits, C):
+    obs = []
+    # weight-1
+    for i in range(num_qubits):
+        o = Observable(num_qubits)
+        o.add_operator(1.0, f"Z {i}")
+        obs.append(o)
+        if len(obs) == C: return obs
+    # weight-2
+    for i, j in itertools.combinations(range(num_qubits), 2):
+        o = Observable(num_qubits)
+        o.add_operator(1.0, f"Z {i} Z {j}")
+        obs.append(o)
+        if len(obs) == C: return obs
+    # weight-3+
+    for w in range(3, num_qubits+1):
+        for idxs in itertools.combinations(range(num_qubits), w):
+            label = " ".join(f"Z {t}" for t in idxs)  # e.g., "Z 0 Z 2 Z 3"
+            o = Observable(num_qubits)
+            o.add_operator(1.0, label)
+            obs.append(o)
+            if len(obs) == C: return obs
+    raise ValueError(f"Could not create {C} distinct Z-product observables with {num_qubits} qubits.")
+
+
+def _scores_adaptive_state(state, num_qubits, n_classes, obs_cache=None):
+    """
+    Return (scores, head_type, obs_cache).
+    - head_type == "probs": scores are probabilities summing to 1 (use CE-from-probs).
+    - head_type == "logits": scores are logits (use CE-from-logits).
+    """
+    k = int(math.ceil(math.log2(n_classes))) if n_classes > 1 else 0
+    # Case A: exact power-of-two classes and enough class bits → probabilities
+    if (n_classes > 1) and (n_classes == (1 << k)) and (k <= num_qubits):
+        vec = state.get_vector()
+        probs = _class_probs_from_statevec(vec, num_qubits, n_classes)
+        return probs, "probs", obs_cache
+    # Case B: otherwise → logits from Z-product observables (avoids unused bucket)
+    if (obs_cache is None) or (len(obs_cache) != n_classes):
+        obs_cache = _build_zprod_observables(num_qubits, n_classes)
+    logits = np.array([o.get_expectation_value(state) for o in obs_cache], dtype=float)
+    return logits, "logits", obs_cache
 
 class ParametricVQC:
     def __init__(self, num_qubits, num_samples, noise_models=[], noise_values=[]):
@@ -21,7 +112,12 @@ class ParametricVQC:
                                   n_redundant=0, n_clusters_per_class=1, random_state=42)
         X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X, 2*y-1, test_size=0.2, random_state=42)  # Convert labels to {-1, +1}
+            X, y.astype(int), test_size=0.2, random_state=42)
+        self.n_classes = int(max(self.y_train.max(), self.y_test.max())) + 1
+        # Optional guard (works with logits head up to 2^q - 1):
+        if self.n_classes > (1 << self.num_qubits):
+            raise ValueError("Too many classes for current num_qubits; increase qubits or reduce classes.")
+
 
     def construct_ansatz(self, state):
         if len(self.noise_models) == 1:
@@ -68,179 +164,6 @@ class ParametricVQC:
         return self.ansatz
     
 
-def softmax(x, axis=-1):
-    e_x = np.exp(x - np.max(x, axis=axis, keepdims=True))
-    return e_x / e_x.sum(axis=axis, keepdims=True)
-
-# #make loss funcn without angles
-# def loss_wo_angles(self, circuit, n_shots=0):
-#     """Calculate classification loss for the current circuit parameters"""
-#     # Calculate predictions
-#     observable = Observable(self.num_qubits)
-#     observable.add_operator(1.0, "Z 0")
-#     #print("Obs:", observable)
-#     #exit()
-#     predictions = []
-#     for x in self.X_train:
-#         # Encode features
-#         feature_circuit = QuantumCircuit(self.num_qubits)
-#         for i in range(self.num_qubits):
-#             feature_circuit.add_gate(RY(i, x[i % len(x)]))
-        
-#         # Combine with variational circuit
-#         full_circuit = QuantumCircuit(self.num_qubits)
-#         full_circuit.merge_circuit(feature_circuit)
-#         full_circuit.merge_circuit(circuit)
-#         state = QuantumState(self.num_qubits)
-#         full_circuit.update_quantum_state(state)
-#         predictions.append(observable.get_expectation_value(state))
-    
-#     # print(len(self.X_train))
-#     predictions = np.array(predictions)
-#     loss = np.mean((predictions - self.y_train)**2)
-#     if n_shots > 0:
-#         shot_noise = get_shot_noise(np.ones_like(predictions), n_shots)
-#         loss += shot_noise
-    
-#     predictions_test = []
-#     for x in self.X_test:
-#         # Encode features
-#         feature_circuit = QuantumCircuit(self.num_qubits)
-#         for i in range(self.num_qubits):
-#             feature_circuit.add_gate(RY(i, x[i % len(x)]))
-        
-#         # Combine with variational circuit
-#         full_circuit = QuantumCircuit(self.num_qubits)
-#         full_circuit.merge_circuit(feature_circuit)
-#         full_circuit.merge_circuit(circuit)
-        
-#         if len(self.noise_models) > 0:
-#             dm = DensityMatrix(self.num_qubits)
-#             full_circuit.update_quantum_state(dm)
-#             predictions_test.append(np.real(np.trace(observable.get_matrix() @ dm.get_matrix())))
-#         else:
-#             state = QuantumState(self.num_qubits)
-#             full_circuit.update_quantum_state(state)
-#             predictions_test.append(observable.get_expectation_value(state))
-    
-#     predictions_test = np.array(predictions_test)
-#     loss_test = np.mean((predictions_test - self.y_test)**2)
-#     if n_shots > 0:
-#         shot_noise = get_shot_noise(np.ones_like(predictions_test), n_shots)  # Using your shot noise function
-#         loss_test += shot_noise
-
-#     return loss, loss_test
-
-
-# def get_classification_loss(self, angles, circuit, n_shots=0, which_angles=[]):
-#     """Calculate classification loss for given parameters"""
-#     parameter_count = circuit.get_parameter_count()
-#     if not list(which_angles):
-#         which_angles = np.arange(parameter_count)
-    
-#     for i, j in enumerate(which_angles):
-#         circuit.set_parameter(j, angles[i])
-
-#     # Calculate predictions
-#     observable = Observable(self.num_qubits)
-#     observable.add_operator(1.0, "Z 0")
-    
-#     predictions = []
-#     for x in self.X_train:
-#         # Encode features
-#         feature_circuit = QuantumCircuit(self.num_qubits)
-#         for i in range(self.num_qubits):
-#             feature_circuit.add_gate(RY(i, x[i % len(x)]))
-        
-#         # Combine with variational circuit
-#         full_circuit = QuantumCircuit(self.num_qubits)
-#         full_circuit.merge_circuit(feature_circuit)
-#         full_circuit.merge_circuit(circuit)
-        
-#         if len(self.noise_models) > 0:
-#             dm = DensityMatrix(self.num_qubits)
-#             full_circuit.update_quantum_state(dm)
-#             predictions.append(np.real(np.trace(observable.get_matrix() @ dm.get_matrix())))
-#         else:
-#             state = QuantumState(self.num_qubits)
-#             full_circuit.update_quantum_state(state)
-#             predictions.append(observable.get_expectation_value(state))
-    
-#     predictions = np.array(predictions)
-#     loss = np.mean((predictions - self.y_train)**2)
-#     if n_shots > 0:
-#         shot_noise = get_shot_noise(np.ones_like(predictions), n_shots)  # Using your shot noise function
-#         loss += shot_noise
-    
-#     return loss
-
-# def get_accuracy(self, angles, circuit, X, y, which_angles=[]):
-#     """Calculate accuracy for given parameters"""
-#     parameter_count = circuit.get_parameter_count()
-#     if not list(which_angles):
-#         which_angles = np.arange(parameter_count)
-    
-#     for i, j in enumerate(which_angles):
-#         circuit.set_parameter(j, angles[i])
-
-#     observable = Observable(self.num_qubits)
-#     observable.add_operator(1.0, "Z 0")
-    
-#     predictions = []
-#     for x in X:
-#         # Encode features
-#         feature_circuit = QuantumCircuit(self.num_qubits)
-#         for i in range(self.num_qubits):
-#             feature_circuit.add_gate(RY(i, x[i % len(x)]))
-        
-#         # Combine with variational circuit
-#         full_circuit = QuantumCircuit(self.num_qubits)
-#         full_circuit.merge_circuit(feature_circuit)
-#         full_circuit.merge_circuit(circuit)
-        
-#         # Get expectation value
-#         if len(self.noise_models) > 0:
-#             dm = DensityMatrix(self.num_qubits)
-#             full_circuit.update_quantum_state(dm)
-#             pred = np.real(np.trace(observable.get_matrix() @ dm.get_matrix()))
-#         else:
-#             state = QuantumState(self.num_qubits)
-#             full_circuit.update_quantum_state(state)
-#             pred = observable.get_expectation_value(state)
-#         predictions.append(np.sign(pred))
-    
-#     return np.mean(np.array(predictions) == y)
-
-
-# ================================================================================
-
-# --- Main Functions ---
-# In VQC.py
-
-import math
-
-def _class_probs_from_statevec(state_vec, n_qubits, n_classes):
-    k = int(math.ceil(math.log2(n_classes)))
-    if k > n_qubits:
-        raise ValueError(f"need at least k={k} class qubits; have {n_qubits}")
-    probs = np.abs(state_vec)**2
-    mask = (1 << k) - 1
-    agg = np.zeros(1 << k, dtype=float)
-    # sum over low-k-bit buckets
-    for idx, p in enumerate(probs):
-        agg[idx & mask] += p
-    cls = agg[:n_classes]
-    s = cls.sum()
-    if s <= 0:
-        return np.ones(n_classes, dtype=float) / n_classes
-    return cls / s
-
-def _ce_loss_from_probs(probs_NC, y_N):
-    """
-    probs_NC: array (N, C) rows sum to 1
-    y_N: int labels in [0, C-1]
-    """
-    return -np.mean(np.log(probs_NC[np.arange(len(y_N)), y_N] + 1e-12))
 
 def loss_wo_angles(self, circuit, n_shots=0):
     """
@@ -263,28 +186,14 @@ def loss_wo_angles(self, circuit, n_shots=0):
         # Get the probability vector for all 2^N basis states
         state = QuantumState(self.num_qubits)
         full_circuit.update_quantum_state(state)
-        state_vector = state.get_vector()
+        scores, head_type, self._obs_cache = _scores_adaptive_state(
+            state, self.num_qubits, self.n_classes, getattr(self, "_obs_cache", None)
+        )
+        predictions.append(scores)
 
-        # all_probabilities = np.abs(state_vector)**2
-        
-        # Use the probabilities of the first n_classes states as our prediction scores
-        # For Iris (3 classes), this will be [P(|00>), P(|01>), P(|10>)]
-
-        # class_scores = all_probabilities[:self.n_classes]
-        class_scores = _class_probs_from_statevec(state_vector, self.num_qubits, self.n_classes)
-
-        predictions.append(class_scores)
-    
     predictions = np.array(predictions) # Shape: (n_samples, n_classes)
-    
-    # Apply softmax and compute cross-entropy loss (same as before)
-    # Even though they are probabilities, softmax helps normalize and is standard for training
-    # probabilities = softmax(predictions)
-    # n_samples = len(self.y_train)
-    # log_likelihood = -np.log(probabilities[np.arange(n_samples), self.y_train] + 1e-9) # Add epsilon for stability
-    # loss = np.mean(log_likelihood)
-    probs = np.vstack(predictions)   # shape (N, C), rows sum to 1
-    loss = _ce_loss_from_probs(probs, self.y_train)
+    M = np.vstack(predictions)
+    loss = _ce_loss_from_probs(M, self.y_train) if head_type == "probs" else _ce_from_logits(M, self.y_train)
 
     # --- 2. Calculate Test Loss (same logic) ---
     predictions_test = []
@@ -299,19 +208,15 @@ def loss_wo_angles(self, circuit, n_shots=0):
 
         state = QuantumState(self.num_qubits)
         full_circuit.update_quantum_state(state)
-        state_vector_test = state.get_vector()
-        # all_probabilities_test = np.abs(state_vector_test)**2
-        # class_scores_test = all_probabilities_test[:self.n_classes]
-        class_scores_test = _class_probs_from_statevec(state_vector_test, self.num_qubits, self.n_classes)
-        predictions_test.append(class_scores_test)
+
+        scores, head_type, self._obs_cache = _scores_adaptive_state(
+            state, self.num_qubits, self.n_classes, getattr(self, "_obs_cache", None)
+        )
+        predictions_test.append(scores)
 
     predictions_test = np.array(predictions_test)
-    # probabilities_test = softmax(predictions_test)
-    # n_samples_test = len(self.y_test)
-    # log_likelihood_test = -np.log(probabilities_test[np.arange(n_samples_test), self.y_test] + 1e-9)
-    # loss_test = np.mean(log_likelihood_test)
-    probs = np.vstack(predictions_test)   # shape (N, C), rows sum to 1
-    loss_test = _ce_loss_from_probs(probs, self.y_test)
+    Mte = np.vstack(predictions_test)
+    loss_test = _ce_loss_from_probs(Mte, self.y_test) if head_type == "probs" else _ce_from_logits(Mte, self.y_test)
 
     return loss, loss_test
 
@@ -340,62 +245,79 @@ def get_classification_loss(self, angles, circuit, n_shots=0, which_angles=[]):
         state = QuantumState(self.num_qubits)
         full_circuit.update_quantum_state(state)
 
-        # CORRECT WAY TO GET PROBABILITIES IN QULACS
-        state_vector = state.get_vector()
-        # all_probabilities = np.abs(state_vector)**2
+        scores, head_type, self._obs_cache = _scores_adaptive_state(
+            state, self.num_qubits, self.n_classes, getattr(self, "_obs_cache", None)
+        )
+        predictions.append(scores)
 
-        # class_scores = all_probabilities[:self.n_classes]
-        class_scores = _class_probs_from_statevec(state_vector, self.num_qubits, self.n_classes)
-
-        predictions.append(class_scores)
-    
     predictions = np.array(predictions)
-    # probabilities = softmax(predictions)
-    # n_samples = len(self.y_train)
-    # log_likelihood = -np.log(probabilities[np.arange(n_samples), self.y_train] + 1e-9)
-    # loss = np.mean(log_likelihood)
-    probs = np.vstack(predictions)   # shape (N, C), rows sum to 1
-    loss = _ce_loss_from_probs(probs, self.y_train)
-    
+
+    M = np.vstack(predictions)
+    loss = _ce_loss_from_probs(M, self.y_train) if head_type == "probs" else _ce_from_logits(M, self.y_train)
     return loss
 
 def get_accuracy(self, angles, circuit, X, y, which_angles=[]):
     """
-    Calculate multiclass accuracy using computational basis measurement.
+    Calculate multiclass accuracy. If head_type == 'logits', align columns
+    by learning a permutation on the TRAIN split (eval-only Hungarian).
     """
     parameter_count = circuit.get_parameter_count()
     if not list(which_angles):
         which_angles = np.arange(parameter_count)
-    
     for i, j in enumerate(which_angles):
         circuit.set_parameter(j, angles[i])
 
+    # Decide head_type once
+    k = int(math.ceil(math.log2(self.n_classes))) if self.n_classes > 1 else 0
+    head_type = "probs" if (self.n_classes > 1 and self.n_classes == (1 << k) and k <= self.num_qubits) else "logits"
+
+    # ---- build eval logits/probs M from (X, y)
     predictions = []
     for x in X:
         feature_circuit = QuantumCircuit(self.num_qubits)
         for i in range(self.num_qubits):
             feature_circuit.add_gate(RY(i, x[i % len(x)]))
-        
         full_circuit = QuantumCircuit(self.num_qubits)
         full_circuit.merge_circuit(feature_circuit)
         full_circuit.merge_circuit(circuit)
-        
         state = QuantumState(self.num_qubits)
         full_circuit.update_quantum_state(state)
+        if head_type == "probs":
+            vec = state.get_vector()
+            scores = _class_probs_from_statevec(vec, self.num_qubits, self.n_classes)
+        else:
+            if not hasattr(self, "_obs_cache") or self._obs_cache is None or len(self._obs_cache) != self.n_classes:
+                self._obs_cache = _build_zprod_observables(self.num_qubits, self.n_classes)
+            scores = np.array([o.get_expectation_value(state) for o in self._obs_cache], dtype=float)
+        predictions.append(scores)
+    M = np.vstack(predictions)  # (N_eval, C)
 
-        # CORRECT WAY TO GET PROBABILITIES IN QULACS
-        state_vector = state.get_vector()
-        # all_probabilities = np.abs(state_vector)**2
-        
-        # We only care about the scores for our classes
-        # class_scores = all_probabilities[:self.n_classes]
-        class_scores = _class_probs_from_statevec(state_vector, self.num_qubits, self.n_classes)
+    # ---- NEW: if logits head, learn permutation on TRAIN split, then apply to M
+    if head_type == "logits":
+        # build train logits matrix M_cal on (X_train, y_train)
+        cal_preds = []
+        for xtr in self.X_train:
+            feat = QuantumCircuit(self.num_qubits)
+            for i in range(self.num_qubits):
+                feat.add_gate(RY(i, xtr[i % len(xtr)]))
+            full = QuantumCircuit(self.num_qubits)
+            full.merge_circuit(feat)
+            full.merge_circuit(circuit)
+            st = QuantumState(self.num_qubits)
+            full.update_quantum_state(st)
+            if not hasattr(self, "_obs_cache") or self._obs_cache is None or len(self._obs_cache) != self.n_classes:
+                self._obs_cache = _build_zprod_observables(self.num_qubits, self.n_classes)
+            cal_scores = np.array([o.get_expectation_value(st) for o in self._obs_cache], dtype=float)
+            cal_preds.append(cal_scores)
+        M_cal = np.vstack(cal_preds)  # (N_train, C)
 
-        predictions.append(class_scores)
-    
-    predicted_classes = np.argmax(np.array(predictions), axis=1)
-    
+        P = _learn_perm_from_logits(M_cal, self.y_train, self.n_classes)
+        M = _apply_perm(M, P)
+
+    # ---- final accuracy
+    predicted_classes = np.argmax(M, axis=1)
     return np.mean(predicted_classes == y)
+
 
 # ================================================================================
 
