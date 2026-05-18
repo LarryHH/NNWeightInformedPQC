@@ -64,6 +64,31 @@ Before taking action, provide:
 2. why it is needed,
 3. what files or outputs it may affect.
 
+## Writing style
+
+- Use academic, scientific prose.
+- Prefer clear, direct sentences over rhetorical or promotional language.
+- Keep claims precise and proportional to the evidence.
+- Avoid em dashes. Use commas, parentheses, or separate sentences instead.
+- Avoid colons unless introducing a list, table, definition, or formal statement.
+- Avoid semicolons unless they improve clarity.
+- Avoid “AI-style” framing, including:
+  - “It is important to note that”
+  - “It should be noted that”
+  - “This highlights”
+  - “This underscores”
+  - “This serves as”
+  - “In conclusion”
+  - “Furthermore” when “Additionally” or a direct sentence is clearer
+  - “Delve into”, “robust”, “seamless”, “leverage”, “pivotal”, “crucial”, “significant” unless technically justified
+- Avoid overclaiming. Do not use words such as “prove”, “guarantee”, “clearly”, or “obviously” unless the statement is formally established.
+- Prefer active voice where it improves clarity.
+- Prefer concrete subjects over vague subjects such as “this”, “it”, or “the approach” when ambiguity is possible.
+- Do not add unnecessary transition sentences.
+- Do not add broad motivational claims unless requested.
+- Preserve the author’s intended meaning, notation, terminology, and level of caution.
+- When revising manuscript text, make the smallest change needed to improve clarity, correctness, or flow.
+
 ## Paper / LaTeX
 
 - Preserve notation, labels, references, and figure/table structure.
@@ -71,6 +96,7 @@ Before taking action, provide:
 - Do not change scientific claims unless supported by results or user instruction.
 - If LaTeX fails, identify the first meaningful error.
 - All manuscript edits must be wrapped in `\larry{new text}% Cx` so they render as coloured review text in the compiled PDF. Old text is preserved as `% Cx OLD: ...` comments above the new version. Structural changes that cannot be wrapped (e.g., `\subsection{}`) use a `% Cx: description` comment instead.
+- Any `% Cx ...` tag must end the line. Unchanged text following on the same line is silently consumed by the LaTeX comment. Place the next sentence on a new line, and put required syntax (e.g., TikZ trailing `;`) before the `%`.
 - Editing `main.tex` and `main.bib` does not require prior confirmation provided the `\larry{}` markup convention is followed and each change cites its C-item.
 
 ## Reviewer-response workflow
