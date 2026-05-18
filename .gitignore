@@ -4,6 +4,8 @@ results/
 *.csv
 _*
 .DS_Store
+paper/
+**/final_results.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

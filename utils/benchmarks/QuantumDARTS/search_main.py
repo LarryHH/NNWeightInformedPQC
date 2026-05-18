@@ -5,11 +5,19 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import matplotlib.pyplot as plt
 import json
+import random
 
 from .quantum_darts_model import QuantumDARTSModel
 from .trainer import DARTSTrainer
 from .utils import GATE_POOL, load_mnist_data, load_multiclass_data, load_openml_data, make_simple_multiclass_data, write_matrix_to_json, qiskit_to_matrix
 
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 def plot_history(search_history, derived_history):
     """Plots the training loss and the derived circuit performance."""
@@ -42,7 +50,7 @@ def plot_history(search_history, derived_history):
     print(f"\nSaved learning curves to {results_dir}/learning_curves.png")
 
 
-def main(dataset_id, n_qubits, n_layers, results_dir='./results'):
+def main(dataset_id, n_qubits, n_layers, seed, results_dir='./results'):
     """
     Main function to configure and run the QuantumDARTS search.
     """
@@ -65,8 +73,8 @@ def main(dataset_id, n_qubits, n_layers, results_dir='./results'):
         print("Loading MNIST dataset for digits 0 and 1")
         X_train, y_train, X_val, y_val, X_test, y_test = load_mnist_data(n_features=n_qubits)
         n_classes = 2
-    elif dataset_id in [61, 187, 37]: # iris, wine, diabetes
-        X_train, y_train, X_val, y_val, X_test, y_test = load_openml_data(dataset_id, n_features=n_qubits, seed=42)
+    elif dataset_id in [61, 187, 37, 1510]: # iris, wine, diabetes, breast cancer
+        X_train, y_train, X_val, y_val, X_test, y_test = load_openml_data(dataset_id, n_features=n_qubits, seed=seed)
         n_classes = len(np.unique(y_train))
         print(f"Loaded dataset ID {dataset_id} with {n_classes} classes.")
     else:
@@ -219,14 +227,19 @@ if __name__ == "__main__":
     }
     N_QUBITS = [2,4,6,8] # [2,4,6,8]
     N_LAYERS = [int(24/q) for q in N_QUBITS]  # Keep depth inversely proportional to qubits
-    for n_qubits, n_layers in zip(N_QUBITS, N_LAYERS):
-        for dataset, (_, n_features) in DATASETS.items():
-            if n_qubits > n_features:
-                print(f"Skipping dataset {dataset} with {n_features} features for {n_qubits} qubits.")
-                continue
-            print(f"\n\n=== Running dataset: {dataset} ===")
-            dataset_id = DATASETS[dataset][0]
-            results_dir = f"/Users/larryhh/Documents/PhD/Projects/weight_matrix_informed_circuit_design/utils/benchmarks/QuantumDARTS/results/{dataset}_{n_qubits}qubits"
-            os.makedirs(results_dir, exist_ok=True)
-            main(dataset_id, n_qubits, n_layers, results_dir)
+
+    SEEDS = [0, 1, 2, 3, 4]
+    for seed in SEEDS:
+        print(f"\n\n=== Running seed: {seed} ===")
+        set_seed(seed)
+        for n_qubits, n_layers in zip(N_QUBITS, N_LAYERS):
+            for dataset, (_, n_features) in DATASETS.items():
+                if n_qubits > n_features:
+                    print(f"Skipping dataset {dataset} with {n_features} features for {n_qubits} qubits.")
+                    continue
+                print(f"\n\n=== Running dataset: {dataset} ===")
+                dataset_id = DATASETS[dataset][0]
+                results_dir = f"/Users/larryhh/Documents/PhD/Projects/weight_matrix_informed_circuit_design/utils/benchmarks/QuantumDARTS/results/{dataset}/seed_{seed}/{n_qubits}qubits"
+                os.makedirs(results_dir, exist_ok=True)
+                main(dataset_id, n_qubits, n_layers, seed, results_dir)
 

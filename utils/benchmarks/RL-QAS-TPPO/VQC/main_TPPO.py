@@ -150,7 +150,6 @@ def read_matrix_from_json(filename: str) -> list[list[str]]:
     return matrix
 
 
-
 # ==============================================================================#
 def modify_state_like_training(state, env, conf, device):
     if conf['agent'].get('en_state', 0):
@@ -531,8 +530,16 @@ def get_args(argv):
     args = parser.parse_args(argv)
     return args
 
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
 if __name__ == '__main__':
 
+    SEEDS = [0, 1, 2, 3, 4]  # Example seeds for multiple runs
     N_QUBITS = [2,4,6,8] 
     DATASETS = {
         "iris": (61, 4),
@@ -540,138 +547,135 @@ if __name__ == '__main__':
         "diabetes": (37, 8),
         # "clusters": (None, 2),  # Synthetic dataset with 2 features
     }
-    for n_qubits in N_QUBITS:
-        for dataset, (_, n_features) in DATASETS.items():
-            if n_qubits > n_features:
-                print(f"Skipping dataset {dataset} with {n_features} features for {n_qubits} qubits.")
-                continue
+    for seed in SEEDS:
+        set_seed(seed)
+        print(f"\n\n================ Starting experiments for seed {seed} ================\n")    
+        # 1. Iterate over all combinations of datasets and qubit counts
+        for n_qubits in N_QUBITS:
+            for dataset, (_, n_features) in DATASETS.items():
+                if n_qubits > n_features:
+                    print(f"Skipping dataset {dataset} with {n_features} features for {n_qubits} qubits.")
+                    continue
 
-            args_dict = {
-                "seed": 0,
-                "config": f'configuration_files/TPPO/{dataset}_coblya_{n_qubits}q_VQC',
-                "experiment_name": 'TPPO/'
-            }
+                args_dict = {
+                    "config": f'configuration_files/TPPO/{dataset}_coblya_{n_qubits}q_VQC',
+                    "output_fp": f'{dataset}/seed_{seed}/{n_qubits}q_VQC',
+                    "experiment_name": 'TPPO/'
+                }
+                    
+                # 2. Convert the dictionary into a Namespace object
+                args = Namespace(**args_dict)
+
+                print("\n### Running Bench-RLQAS with the following setup: ###")
+                print("> Seed:", seed)
+                print("> Config:", args.config)
+                print()
+
+                results_path ="results/"
+                pathlib.Path(f"{results_path}{args.experiment_name}{args.output_fp}").mkdir(parents=True, exist_ok=True)
+                # device = torch.device(f"cuda:{args.gpu_id}")
+                device = torch.device("cpu")  # Uncomment to force CPU if needed
+
+                conf = get_config(args.experiment_name, f'{args.config}.cfg')
+
+                """ Environment and Agent initialization """
+                environment = CircuitEnv(conf, seed, device=device)
+
+                # Calculate effective state_size based on actual state output
+                initial_state = environment.reset()
+                base_state_size = initial_state.shape[0]  # Use actual size from reset
+                effective_state_size = base_state_size
+                if conf['agent']['en_state']:
+                    effective_state_size += 1  # For prev_energy
+                if "threshold_in_state" in conf['agent'].keys() and conf['agent']["threshold_in_state"]:
+                    effective_state_size += 1  # For done_threshold
+
+                # Debugging: Verify state size consistency
+                modified_state = modify_state(initial_state, environment, conf, device)
+                actual_state_size = modified_state.shape[0]
+                # print(f"Environment state_size: {environment.state_size}")
+                # print(f"Base state size (from reset): {base_state_size}, Effective state size: {effective_state_size}")
+                # print(f"Modified state shape: {modified_state.shape}, Expected size: {effective_state_size}")
+                if actual_state_size != effective_state_size:
+                    raise ValueError(f"State size mismatch: expected {effective_state_size}, got {actual_state_size}")
+                if base_state_size != environment.state_size:
+                    print(f"Warning: environment.state_size ({environment.state_size}) differs from actual state size ({base_state_size})")
+
+                # Initialize agent with the corrected effective state size
+                agent = agents.__dict__[conf['agent']['agent_type']].__dict__[conf['agent']['agent_class']](
+                    conf, environment.action_size, effective_state_size, device
+                )
+                agent.saver = Saver(f"{results_path}{args.experiment_name}{args.output_fp}", seed)
                 
-            # 2. Convert the dictionary into a Namespace object
-            args = Namespace(**args_dict)
+                # Debug: Verify device placement
+                # print(f"Agent policy device: {next(agent.policy.parameters()).device}")
+                # print(f"Agent value device: {next(agent.value.parameters()).device}")
+                # print(f"Agent action size: {agent.action_size}, Translate dict length: {len(agent.translate)}")
 
-            print("\n### Running Bench-RLQAS with the following setup: ###")
-            print("> Seed:", args.seed)
-            print("> Config:", args.config)
-            print()
+                train(agent, environment, conf['general']['episodes'], seed, 
+                    f"{results_path}{args.experiment_name}{args.output_fp}", conf['env']['accept_err'])
+                agent.saver.save_file()
 
-            results_path ="results/"
-            pathlib.Path(f"{results_path}{args.experiment_name}{args.config}").mkdir(parents=True, exist_ok=True)
-            # device = torch.device(f"cuda:{args.gpu_id}")
-            device = torch.device("cpu")  # Uncomment to force CPU if needed
+                
+                # ==============================================================================#
+                try:
+                    circuit = greedy_eval_episode(environment, agent, device, conf)
+                    print("Retrieved circuit via get_parametric_circuit()")
+                    print_circuit_details(circuit)
+                    circuit_fp = f"{results_path}{args.experiment_name}{args.output_fp}/thresh_{conf['env']['accept_err']}_{seed}"
+                    qiskit_circuit = convert_qulacs_to_qiskit(circuit)
+                    qiskit_circuit.draw(output='mpl', filename=f"{circuit_fp}_circuit.png")
+                    # save_circuit_to_file(circuit, f"{circuit_fp}_circuit.pkl")
+                    circuit_matrix = qiskit_to_matrix(qiskit_circuit)
+                    write_matrix_to_json(circuit_matrix, f"{circuit_fp}_circuit.json")
+                except Exception as e:
+                    print(f"[eval] get_parametric_circuit() failed: {e}")
+                # ==============================================================================#
 
-            conf = get_config(args.experiment_name, f'{args.config}.cfg')
-
-            torch.backends.cudnn.deterministic = True
-            random.seed(args.seed)
-            torch.manual_seed(args.seed)
-            torch.cuda.manual_seed(args.seed)
-            np.random.seed(args.seed)
-
-
-            """ Environment and Agent initialization """
-            environment = CircuitEnv(conf, args.seed, device=device)
-
-            # Calculate effective state_size based on actual state output
-            initial_state = environment.reset()
-            base_state_size = initial_state.shape[0]  # Use actual size from reset
-            effective_state_size = base_state_size
-            if conf['agent']['en_state']:
-                effective_state_size += 1  # For prev_energy
-            if "threshold_in_state" in conf['agent'].keys() and conf['agent']["threshold_in_state"]:
-                effective_state_size += 1  # For done_threshold
-
-            # Debugging: Verify state size consistency
-            modified_state = modify_state(initial_state, environment, conf, device)
-            actual_state_size = modified_state.shape[0]
-            # print(f"Environment state_size: {environment.state_size}")
-            # print(f"Base state size (from reset): {base_state_size}, Effective state size: {effective_state_size}")
-            # print(f"Modified state shape: {modified_state.shape}, Expected size: {effective_state_size}")
-            if actual_state_size != effective_state_size:
-                raise ValueError(f"State size mismatch: expected {effective_state_size}, got {actual_state_size}")
-            if base_state_size != environment.state_size:
-                print(f"Warning: environment.state_size ({environment.state_size}) differs from actual state size ({base_state_size})")
-
-            # Initialize agent with the corrected effective state size
-            agent = agents.__dict__[conf['agent']['agent_type']].__dict__[conf['agent']['agent_class']](
-                conf, environment.action_size, effective_state_size, device
-            )
-            agent.saver = Saver(f"{results_path}{args.experiment_name}{args.config}", args.seed)
-            
-            # Debug: Verify device placement
-            # print(f"Agent policy device: {next(agent.policy.parameters()).device}")
-            # print(f"Agent value device: {next(agent.value.parameters()).device}")
-            # print(f"Agent action size: {agent.action_size}, Translate dict length: {len(agent.translate)}")
-
-            train(agent, environment, conf['general']['episodes'], args.seed, 
-                f"{results_path}{args.experiment_name}{args.config}", conf['env']['accept_err'])
-            agent.saver.save_file()
-
-            
-            # ==============================================================================#
-            try:
-                circuit = greedy_eval_episode(environment, agent, device, conf)
-                print("Retrieved circuit via get_parametric_circuit()")
-                print_circuit_details(circuit)
-                circuit_fp = f"{results_path}{args.experiment_name}{args.config}/thresh_{conf['env']['accept_err']}_{args.seed}"
-                qiskit_circuit = convert_qulacs_to_qiskit(circuit)
-                qiskit_circuit.draw(output='mpl', filename=f"{circuit_fp}_circuit.png")
-                # save_circuit_to_file(circuit, f"{circuit_fp}_circuit.pkl")
-                circuit_matrix = qiskit_to_matrix(qiskit_circuit)
-                write_matrix_to_json(circuit_matrix, f"{circuit_fp}_circuit.json")
-            except Exception as e:
-                print(f"[eval] get_parametric_circuit() failed: {e}")
-            # ==============================================================================#
-
-            if circuit is None:
-                print("[eval] WARNING: Could not retrieve a parametric circuit; skipping accuracy.")
-            else:
-                if 'openml' in conf:
-                    X_te, y_te, num_qubits = regenerate_open_ml_test_data(conf, args.seed, n_components=conf['env']['num_qubits'])
-                    n_classes = conf.get('openml', {}).get('n_classes', 2)
-                elif 'clusters' in conf:
-                    num_qubits = int(conf['env']['num_qubits'])
-                    cluster_std = float(conf['clusters'].get('cluster_std', 0.5))
-                    n_classes = int(conf['clusters']['n_classes'])
-                    _, _, X_te, y_te, _, _ = make_simple_multiclass_data(
-                        n_samples=int(conf['env']['samples']),
-                        n_features=num_qubits,
-                        n_classes=n_classes,
-                        random_state=args.seed,
-                        cluster_std=cluster_std
-                    )
+                if circuit is None:
+                    print("[eval] WARNING: Could not retrieve a parametric circuit; skipping accuracy.")
                 else:
-                    raise ValueError("No valid data source specified in config.")
+                    if 'openml' in conf:
+                        X_te, y_te, num_qubits = regenerate_open_ml_test_data(conf, seed, n_components=conf['env']['num_qubits'])
+                        n_classes = conf.get('openml', {}).get('n_classes', 2)
+                    elif 'clusters' in conf:
+                        num_qubits = int(conf['env']['num_qubits'])
+                        cluster_std = float(conf['clusters'].get('cluster_std', 0.5))
+                        n_classes = int(conf['clusters']['n_classes'])
+                        _, _, X_te, y_te, _, _ = make_simple_multiclass_data(
+                            n_samples=int(conf['env']['samples']),
+                            n_features=num_qubits,
+                            n_classes=n_classes,
+                            random_state=seed,
+                            cluster_std=cluster_std
+                        )
+                    else:
+                        raise ValueError("No valid data source specified in config.")
 
-                acc, cm, _preds = eval_accuracy_on_circuit(circuit, X_te, y_te, num_qubits, n_classes)
-                
-                print(f"\n[eval] TEST ACCURACY = {acc*100:.2f}%")
-                
-                # --- MODIFIED PRINTOUT ---
-                # This now prints the multiclass confusion matrix correctly
-                print("[eval] Confusion matrix (rows=true, cols=pred):")
-                print(cm)
+                    acc, cm, _preds = eval_accuracy_on_circuit(circuit, X_te, y_te, num_qubits, n_classes)
+                    
+                    print(f"\n[eval] TEST ACCURACY = {acc*100:.2f}%")
+                    
+                    # --- MODIFIED PRINTOUT ---
+                    # This now prints the multiclass confusion matrix correctly
+                    print("[eval] Confusion matrix (rows=true, cols=pred):")
+                    print(cm)
 
-                # Save alongside other results
-                out_dir = f"{results_path}{args.experiment_name}{args.config}/thresh_{conf['env']['accept_err']}_{args.seed}_results.json"
-                print(f"[eval] Saving results to {out_dir}")
-                with open(out_dir, "w") as f:
-                    # Saving the confusion matrix as a list of lists for JSON compatibility
-                    json.dump({
-                        "accuracy": float(acc),
-                        "confusion_matrix": cm.tolist(), 
-                        "test_size": int(len(y_te)),
-                        "num_qubits": int(num_qubits),
-                        "episodes": int(conf['general']['episodes']),
-                        "num_layers": int(conf['env']['num_layers'])
-                    }, f, indent=2)
-            
-            torch.save(agent.policy.state_dict(), f"{results_path}{args.experiment_name}{args.config}/thresh_{conf['env']['accept_err']}_{args.seed}_policy_model.pt")
-            torch.save(agent.value.state_dict(), f"{results_path}{args.experiment_name}{args.config}/thresh_{conf['env']['accept_err']}_{args.seed}_value_model.pt")
-            torch.save(agent.optim_policy.state_dict(), f"{results_path}{args.experiment_name}{args.config}/thresh_{conf['env']['accept_err']}_{args.seed}_policy_optim.pt")
-            torch.save(agent.optim_value.state_dict(), f"{results_path}{args.experiment_name}{args.config}/thresh_{conf['env']['accept_err']}_{args.seed}_value_optim.pt")
+                    # Save alongside other results
+                    out_dir = f"{results_path}{args.experiment_name}{args.output_fp}/thresh_{conf['env']['accept_err']}_{seed}_results.json"
+                    print(f"[eval] Saving results to {out_dir}")
+                    with open(out_dir, "w") as f:
+                        # Saving the confusion matrix as a list of lists for JSON compatibility
+                        json.dump({
+                            "accuracy": float(acc),
+                            "confusion_matrix": cm.tolist(), 
+                            "test_size": int(len(y_te)),
+                            "num_qubits": int(num_qubits),
+                            "episodes": int(conf['general']['episodes']),
+                            "num_layers": int(conf['env']['num_layers'])
+                        }, f, indent=2)
+                
+                torch.save(agent.policy.state_dict(), f"{results_path}{args.experiment_name}{args.output_fp}/thresh_{conf['env']['accept_err']}_{seed}_policy_model.pt")
+                torch.save(agent.value.state_dict(), f"{results_path}{args.experiment_name}{args.output_fp}/thresh_{conf['env']['accept_err']}_{seed}_value_model.pt")
+                torch.save(agent.optim_policy.state_dict(), f"{results_path}{args.experiment_name}{args.output_fp}/thresh_{conf['env']['accept_err']}_{seed}_policy_optim.pt")
+                torch.save(agent.optim_value.state_dict(), f"{results_path}{args.experiment_name}{args.output_fp}/thresh_{conf['env']['accept_err']}_{seed}_value_optim.pt")

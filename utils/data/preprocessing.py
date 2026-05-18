@@ -69,7 +69,7 @@ def create_data_splits(X, y, batch_size=32, is_classical=True, do_pca=False, use
 
     is_multiclass = len(np.unique(y)) > 2
 
-    if do_pca:
+    if do_pca and X.shape[1] > n_components:
         X = apply_pca(X, n_components=n_components, seed=seed)
         print(f"{'Classical' if is_classical else 'Quantum'} data reduced to {X.shape[1]} dimensions using PCA.")
 

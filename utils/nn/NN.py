@@ -7,10 +7,81 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.profiler as profiler
 
+import copy
+
+
+class EarlyStopping:
+    def __init__(
+        self,
+        patience=10,
+        min_delta=0.0,
+        mode="auto",
+        metric="val_loss",
+        restore_best_weights=True,
+    ):
+        self.patience = patience
+        self.min_delta = float(min_delta)
+        self.metric = metric
+        self.restore_best_weights = restore_best_weights
+
+        if mode not in {"min", "max", "auto"}:
+            raise ValueError("mode must be 'min', 'max', or 'auto'")
+        self.mode = mode
+
+        # Internal state
+        self.best = None
+        self.best_state = None
+        self.bad_epochs = 0
+        self.stopped_epoch = None
+        self._cmp_sign = None  # +1 for ">" (max), -1 for "<" (min)
+
+    def _decide_mode(self):
+        if self.mode != "auto":
+            return
+        # Heuristic: minimize if metric contains "loss", else maximize
+        self.mode = "min" if "loss" in self.metric.lower() else "max"
+
+    def _is_better(self, current):
+        if self.best is None:
+            return True
+        if self._cmp_sign < 0:  # min
+            return current < self.best - self.min_delta
+        else:  # max
+            return current > self.best + self.min_delta
+
+    def step(self, current_value, model, epoch_idx):
+        if self._cmp_sign is None:
+            self._decide_mode()
+            self._cmp_sign = -1 if self.mode == "min" else +1
+
+        if self._is_better(current_value):
+            self.best = current_value
+            self.bad_epochs = 0
+            if self.restore_best_weights:
+                # Keep a deep copy of the best weights
+                self.best_state = copy.deepcopy(model.state_dict())
+        else:
+            self.bad_epochs += 1
+            if self.bad_epochs >= self.patience:
+                self.stopped_epoch = epoch_idx
+                if self.restore_best_weights and self.best_state is not None:
+                    model.load_state_dict(self.best_state)
+                return True  # stop
+        return False  # continue
+
+# early_cfg = {
+#     "patience": 10,
+#     "min_delta": 0.0,
+#     "mode": "auto",            # "min" for losses, "max" for acc/f1/etc. Use "auto" to infer.
+#     "metric": "val_loss",      # any of: val_loss, val_acc, val_prec, val_rec, val_f1
+#     "restore_best_weights": True
+# }
+
 class NN(nn.Module):
     """
     Base Neural Network class providing common training, evaluation, and history plotting functionalities.
     """
+
     def __init__(self, num_classes, use_gpu=False):
         """
         Initializes the base NN class.
@@ -21,14 +92,19 @@ class NN(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.is_multiclass = num_classes > 2
-        self.criterion = None # Must be set by subclasses
+        self.criterion = None  # Must be set by subclasses
         self.history = {
             "epochs": [],
-            "train_loss": [], "val_loss": [],
-            "train_acc": [], "val_acc": [],
-            "train_prec": [], "val_prec": [],
-            "train_rec": [], "val_rec": [],
-            "train_f1": [], "val_f1": [],
+            "train_loss": [],
+            "val_loss": [],
+            "train_acc": [],
+            "val_acc": [],
+            "train_prec": [],
+            "val_prec": [],
+            "train_rec": [],
+            "val_rec": [],
+            "train_f1": [],
+            "val_f1": [],
         }
         if use_gpu:
             if torch.cuda.is_available():
@@ -40,14 +116,19 @@ class NN(nn.Module):
             self.device = torch.device("cpu")
         self.to(self.device)
         print(f"Initialized {self.__class__.__name__} on device: {self.device}")
-    
+
     def set_history_to_zero_for_loaded_model(self):
         self.history = {
-            "train_loss": [0.0], "val_loss": [0.0],
-            "train_acc": [0.0], "val_acc": [0.0],
-            "train_prec": [0.0], "val_prec": [0.0],
-            "train_rec": [0.0], "val_rec": [0.0],
-            "train_f1": [0.0], "val_f1": [0.0],
+            "train_loss": [0.0],
+            "val_loss": [0.0],
+            "train_acc": [0.0],
+            "val_acc": [0.0],
+            "train_prec": [0.0],
+            "val_prec": [0.0],
+            "train_rec": [0.0],
+            "val_rec": [0.0],
+            "train_f1": [0.0],
+            "val_f1": [0.0],
         }
 
     def forward(self, x):
@@ -97,7 +178,9 @@ class NN(nn.Module):
         # 2. Prepare targets: yb_processed = self._prepare_targets_for_loss(yb_original)
         # 3. Calculate loss: loss = self.criterion(logits, yb_processed)
         # 4. Return (logits, loss)
-        raise NotImplementedError("Subclasses must implement _evaluate_batch_loss_and_logits.")
+        raise NotImplementedError(
+            "Subclasses must implement _evaluate_batch_loss_and_logits."
+        )
 
     def _prepare_targets_for_loss(self, yb):
         """
@@ -124,79 +207,104 @@ class NN(nn.Module):
         Returns:
             torch.Tensor: Processed target labels.
         """
-        return yb.long().view(-1) # Ensure 1D for comparison with argmax output
+        return yb.long().view(-1)  # Ensure 1D for comparison with argmax output
 
     def _to_device(self, *tensors):
         """Moves all input tensors to the model's device."""
         return [t.to(self.device) for t in tensors]
-    
-    def end_epoch(self):          
+
+    def end_epoch(self):
         """Called once after every training epoch."""
         pass
-        
-    def fit(self, train_loader, val_loader, epochs, optimizer, scheduler=None, verbose=True, use_profiler=False, eval_every=1):
-            """
-            Trains the model for a specified number of epochs.
-            If verbose is True, uses tqdm for progress display.
-            If verbose is False, training is silent.
-            Args:
-                use_profiler (bool): If True, enables PyTorch profiler during training.
-                eval_every (int): Controls the frequency of evaluation. E.g., eval_every=5 runs evaluation every 5 epochs.
-            """
-    
-            profiler_schedule = torch.profiler.schedule(wait=1, warmup=1, active=2, repeat=1)
-            profiler_context = None
-
-            if use_profiler:
-                activities = [
-                    torch.profiler.ProfilerActivity.CPU,
-                ]
-                if self.device.type == 'cuda':
-                    activities.append(torch.profiler.ProfilerActivity.CUDA)
-
-                print("--- PyTorch Profiler Enabled ---")
-                profiler_context = profiler.profile(
-                    schedule=profiler_schedule,
-                    activities=activities,
-                    on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/qnn_profile'),
-                    with_stack=True,
-                    profile_memory=True
-                )
-                profiler_context.__enter__() # Manually enter the context manager
 
 
+    def fit(
+        self,
+        train_loader,
+        val_loader,
+        epochs,
+        optimizer,
+        scheduler=None,
+        verbose=True,
+        use_profiler=False,
+        eval_every=1,
+        early_stopping=None,
+    ):
+        profiler_schedule = torch.profiler.schedule(wait=1, warmup=1, active=2, repeat=1)
+        profiler_context = None
+
+        # --- Early stopping init ---
+        es = None
+        if early_stopping is not None:
+            if not isinstance(early_stopping, dict):
+                raise ValueError("early_stopping must be a dict or None")
+            patience = epochs // 10
+            early_stopping.setdefault("patience", patience)
+            es = EarlyStopping(**early_stopping)
+
+        stop_training = False  # flag to break outer loop
+
+        if use_profiler:
+            activities = [torch.profiler.ProfilerActivity.CPU]
+            if self.device.type == "cuda":
+                activities.append(torch.profiler.ProfilerActivity.CUDA)
+            profiler_context = profiler.profile(
+                schedule=profiler_schedule,
+                activities=activities,
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    "./log/qnn_profile"
+                ),
+                with_stack=True,
+                profile_memory=True,
+            )
+            profiler_context.__enter__()
+
+        try:
             # --- Training Loop ---
             for epoch in range(epochs):
-                self.train() # Set model to training mode
-                
-                # Setup tqdm loop if verbose, otherwise iterate directly
-                if verbose:
-                    loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
-                else:
-                    loop = train_loader 
+                if stop_training:
+                    break
+                self.train()
 
+                loop = (
+                    tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
+                    if verbose
+                    else train_loader
+                )
                 n_batches = len(train_loader)
-                
+
                 for i, (xb, yb) in enumerate(loop):
                     xb, yb = self._to_device(xb, yb)
-                    loss = self._train_batch(xb, yb, optimizer) # Implemented by subclass
-                    
+                    loss = self._train_batch(xb, yb, optimizer)
+
                     postfix_data = {"batch_loss": f"{loss.item():.3f}"}
 
-                    # If profiler is active, call prof.step() after each batch
                     if use_profiler and profiler_context is not None:
                         profiler_context.step()
-                    
-                    # --- MODIFIED BLOCK ---
-                    # Check if it's the last batch AND if it's an evaluation epoch
-                    if (epoch + 1) % eval_every == 0 and i == n_batches - 1:
-                        # Evaluate silently for metrics to update history and postfix
-                        train_loss_eval, train_acc_eval, train_prec_eval, train_rec_eval, train_f1_eval, *_ = self.evaluate(train_loader, verbose=False)
-                        val_loss_eval,   val_acc_eval, val_prec_eval, val_rec_eval, val_f1_eval, *_ = self.evaluate(val_loader, verbose=False)
 
+                    # Evaluate only at configured cadence and at last batch
+                    if (epoch + 1) % eval_every == 0 and i == n_batches - 1:
+                        (
+                            train_loss_eval,
+                            train_acc_eval,
+                            train_prec_eval,
+                            train_rec_eval,
+                            train_f1_eval,
+                            *_,
+                        ) = self.evaluate(train_loader, verbose=False)
+                        (
+                            val_loss_eval,
+                            val_acc_eval,
+                            val_prec_eval,
+                            val_rec_eval,
+                            val_f1_eval,
+                            *_,
+                        ) = self.evaluate(val_loader, verbose=False)
 
                         if scheduler is not None:
-                            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                            if isinstance(
+                                scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau
+                            ):
                                 scheduler.step(val_loss_eval)
                             else:
                                 scheduler.step()
@@ -213,28 +321,61 @@ class NN(nn.Module):
                         self.history["train_f1"].append(train_f1_eval)
                         self.history["val_f1"].append(val_f1_eval)
 
-                        # Update postfix with epoch summaries if verbose
                         if verbose:
-                            postfix_data.update({
-                                "train_loss": f"{train_loss_eval:.3f}",
-                                "train_acc":  f"{train_acc_eval:.3f}",
-                                "val_loss":   f"{val_loss_eval:.3f}",
-                                "val_acc":    f"{val_acc_eval:.3f}",
-                            })
+                            postfix_data.update(
+                                {
+                                    "train_loss": f"{train_loss_eval:.3f}",
+                                    "train_acc": f"{train_acc_eval:.3f}",
+                                    "val_loss": f"{val_loss_eval:.3f}",
+                                    "val_acc": f"{val_acc_eval:.3f}",
+                                }
+                            )
                             if scheduler:
-                                current_lr = optimizer.param_groups[0]['lr']
+                                current_lr = optimizer.param_groups[0]["lr"]
                                 postfix_data["lr"] = f"{current_lr:.2e}"
-                    
-                    # Set postfix for tqdm loop if verbose
+
+                        # --- Early stopping check ---
+                        if es is not None:
+                            # Map available validation metrics
+                            val_metrics = {
+                                "val_loss": val_loss_eval,
+                                "val_acc": val_acc_eval,
+                                "val_prec": val_prec_eval,
+                                "val_rec": val_rec_eval,
+                                "val_f1": val_f1_eval,
+                            }
+                            metric_name = es.metric
+                            if metric_name not in val_metrics:
+                                # fallback to val_loss if user specified an unknown metric
+                                metric_name = "val_loss"
+                            if es.step(val_metrics[metric_name], self, epoch_idx=epoch + 1):
+                                stop_training = True  # trigger outer break after this batch
+
                     if verbose and isinstance(loop, tqdm):
                         loop.set_postfix(**postfix_data)
-                self.end_epoch() 
-            
+
+                self.end_epoch()
+                # If early stop triggered after evaluation at end of epoch:
+                if stop_training:
+                    break
+
+        except Exception as e:
+            print(f"Exception during training: {e}")
+            raise e
+
+        finally:
             # --- Profiler Teardown ---
             if use_profiler and profiler_context is not None:
-                profiler_context.__exit__(None, None, None) # Manually exit the context manager
+                profiler_context.__exit__(None, None, None)
                 print("--- PyTorch Profiler Results ---")
-                print(profiler_context.key_averages().table(sort_by="cuda_time_total" if self.device.type == 'cuda' else "cpu_time_total", row_limit=20))
+                print(
+                    profiler_context.key_averages().table(
+                        sort_by="cuda_time_total"
+                        if self.device.type == "cuda"
+                        else "cpu_time_total",
+                        row_limit=20,
+                    )
+                )
                 print("\nRun: tensorboard --logdir=./log to view detailed trace.")
 
     @torch.no_grad()
@@ -250,14 +391,16 @@ class NN(nn.Module):
         Returns:
             tuple: (average_loss, accuracy, precision, recall, f1_score, y_pred_numpy, y_true_numpy)
         """
-        self.eval() # Set model to evaluation mode
+        self.eval()  # Set model to evaluation mode
         total_loss_sum, correct_preds, total_samples = 0.0, 0, 0
         all_y_pred_tensors, all_y_true_tensors = [], []
-        
+
         loop = tqdm(loader, desc="Evaluating", leave=False, disable=not verbose)
         for xb, yb_original in loop:
             xb, yb_original = self._to_device(xb, yb_original)
-            logits, loss_value = self._evaluate_batch_loss_and_logits(xb, yb_original) # Implemented by subclass
+            logits, loss_value = self._evaluate_batch_loss_and_logits(
+                xb, yb_original
+            )  # Implemented by subclass
             yb_for_comparison = self._prepare_targets_for_comparison(yb_original)
 
             total_loss_sum += loss_value.item() * xb.size(0)
@@ -269,8 +412,9 @@ class NN(nn.Module):
                 else:
                     # This should ideally be handled by _prepare_targets_for_comparison
                     # Or indicates a more fundamental issue in data prep / model output.
-                    print(f"Warning: Shape mismatch in evaluation. y_pred: {y_pred_batch.shape}, y_true: {yb_for_comparison.shape}.")
-
+                    print(
+                        f"Warning: Shape mismatch in evaluation. y_pred: {y_pred_batch.shape}, y_true: {yb_for_comparison.shape}."
+                    )
 
             correct_preds += (y_pred_batch == yb_for_comparison).sum().item()
             total_samples += yb_original.size(0)
@@ -279,7 +423,8 @@ class NN(nn.Module):
             all_y_true_tensors.append(yb_for_comparison.cpu())
 
         if total_samples == 0:
-            if verbose: print("Warning: Evaluation loader is empty.")
+            if verbose:
+                print("Warning: Evaluation loader is empty.")
             empty_np_array = np.array([])
             return 0.0, 0.0, 0.0, 0.0, 0.0, empty_np_array, empty_np_array
 
@@ -289,28 +434,42 @@ class NN(nn.Module):
         y_pred_np = torch.cat(all_y_pred_tensors).numpy()
         y_true_np = torch.cat(all_y_true_tensors).numpy()
 
-        avg_mode = 'macro' if self.is_multiclass else 'binary'
+        avg_mode = "macro" if self.is_multiclass else "binary"
 
-        precision = precision_score(y_true_np, y_pred_np, average=avg_mode, zero_division=0)
-        recall    = recall_score(y_true_np, y_pred_np, average=avg_mode, zero_division=0)
-        f1        = f1_score(y_true_np, y_pred_np, average=avg_mode, zero_division=0)
+        precision = precision_score(
+            y_true_np, y_pred_np, average=avg_mode, zero_division=0
+        )
+        recall = recall_score(y_true_np, y_pred_np, average=avg_mode, zero_division=0)
+        f1 = f1_score(y_true_np, y_pred_np, average=avg_mode, zero_division=0)
 
-        return avg_epoch_loss, epoch_accuracy, precision, recall, f1, y_pred_np, y_true_np
+        return (
+            avg_epoch_loss,
+            epoch_accuracy,
+            precision,
+            recall,
+            f1,
+            y_pred_np,
+            y_true_np,
+        )
 
     def plot_history(self):
         """
         Plots training and validation loss and/or accuracy curves.
         """
-        epochs = self.history["epochs"] 
-        
+        epochs = self.history["epochs"]
+
         plt.figure(figsize=(8, 5))
-        plt.plot(epochs, self.history["train_loss"], 'b-o', label="Train") # Added 'o' marker
-        plt.plot(epochs, self.history["val_loss"], 'r-o', label="Validation") # Added 'o' marker
+        plt.plot(
+            epochs, self.history["train_loss"], "b-o", label="Train"
+        )  # Added 'o' marker
+        plt.plot(
+            epochs, self.history["val_loss"], "r-o", label="Validation"
+        )  # Added 'o' marker
         plt.xlabel("Epoch")
         plt.ylabel("Loss (NLL)")
         plt.title("Loss Curves")
         plt.legend()
         plt.grid(alpha=0.3)
-        
+
         plt.tight_layout()
         plt.show()

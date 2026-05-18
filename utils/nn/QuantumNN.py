@@ -62,13 +62,26 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         """
         super().__init__(num_classes=num_classes, use_gpu=use_gpu)
         self.n_qubits = n_qubits
+        self.num_classes = num_classes
         self.ansatz = ansatz
         self.initial_point = initial_point
         self.model = None
-        self.criterion = nn.NLLLoss()
+        self.samplerqnn = None
         self.seed = seed if seed is not None else algorithm_globals.random_seed
 
         self.scaler = GradScaler(enabled=(self.device.type == 'cuda'))
+
+        ######### Class imbalance handling #########
+        M = 2 ** self.n_qubits
+        counts = torch.tensor(
+            [M // self.num_classes + (1 if c < (M % self.num_classes) else 0) for c in range(self.num_classes)],
+            dtype=torch.float32
+        )
+        weights = (1.0 / counts).to(self.device)
+        self.criterion = nn.NLLLoss(weight=weights)
+        # self.criterion = nn.NLLLoss()
+        ############################################
+
 
         # feature_map = ZZFeatureMap(feature_dimension=n_qubits, reps=2)
         feature_map = zzfeaturemap_nontranspiled(n_qubits, reps=2)
@@ -79,7 +92,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
 
         def interpret(x):
             return x % self.num_classes
-
+        
         self.sampler = self.select_sampler(
             sampler_device="gpu" if use_gpu else "cpu",
             default_shots=default_shots,
@@ -108,6 +121,7 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
             input_gradients=False,  # Default, but can be explicit
             pass_manager=PassManager(),  # Added as in original code
         )
+        self.samplerqnn = qnn  # Keep a reference to the SamplerQNN instance
 
         num_ansatz_params = 0
         if self.ansatz.parameters:  # Check if ansatz has parameters
@@ -266,18 +280,6 @@ class QuantumNN(NN):  # Renamed from SamplerQNNTorchModel
         Ensures targets are Long type and have shape (N).
         """
         return yb.long().view(-1)
-
-    # def _train_batch(self, xb, yb, optimizer):
-    #     """
-    #     Performs a single training step for the QuantumNN.
-    #     """
-    #     optimizer.zero_grad()
-    #     log_probs = self(xb)  # self.forward(xb) which returns log_probabilities
-    #     yb_processed = self._prepare_targets_for_loss(yb)
-    #     loss = self.criterion(log_probs, yb_processed)
-    #     loss.backward()
-    #     optimizer.step()
-    #     return loss
 
     def _train_batch(self, xb, yb, optimizer):
         optimizer.zero_grad()

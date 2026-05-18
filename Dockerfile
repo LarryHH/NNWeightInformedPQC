@@ -10,9 +10,7 @@
 # # docker build -t larry:nnwipqc .
 # # docker run -d --rm -v ./data:/usr/src/app/data -v ./tsne/results:/usr/src/app/tsne/results -v ./pca/results:/usr/src/app/pca/results -v ./custom_clustering_utils/results:/usr/src/app/custom_clustering_utils/results larry:csiro_workstation
 # # docker run -it --rm -v ./data:/usr/src/app/data -v ./tsne/results:/usr/src/app/tsne/results ./pca/results:/usr/src/app/pca/results -v ./custom_clustering_utils/results:/usr/src/app/custom_clustering_utils/results larry:csiro_workstation
-# # docker run -it --rm --gpus "device=3" -v ./results larry:nnwipqc
-
-
+# # docker run -it --rm --gpus "device=3" -v ./results:/app/results larry:nnwipqc
 
 # # docker run --gpus 1 -it --rm -v ./data:/usr/src/app/data -v ./tsne/results:/usr/src/app/tsne/results -v ./pca/results:/usr/src/app/pca/results ./custom_clustering_utils/results:/usr/src/app/custom_clustering_utils/results larry:csiro_workstation
 # # curl "https://drive.usercontent.google.com/download?id={FILE_ID}&confirm=xxx" -o FILENAME.zip
@@ -90,4 +88,4 @@ COPY . .
 # Set the default command when the container runs
 # --------------------------------------------------------------------------
 # CMD ["bash"] # Use this if you want to enter the container shell for debugging
-# CMD ["python", "your_main_script.py"] # Replace with your actual script name
+# CMD ["python", "main.py"]

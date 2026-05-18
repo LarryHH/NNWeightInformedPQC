@@ -1,0 +1,20 @@
+[
+  {
+      "name": "TTN (d=1)",
+      "class_str": "TTNAnsatz",
+      "init_args": {"reps": 1},
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "TTN (d=2)",
+      "class_str": "TTNAnsatz",
+      "init_args": {"reps": 2},
+      "qnn_extra_args": {}
+  },
+  {
+      "name": "TTN (d=3)",
+      "class_str": "TTNAnsatz",
+      "init_args": {"reps": 3},
+      "qnn_extra_args": {}
+  }
+]
